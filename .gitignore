@@ -1,25 +1,12 @@
-# --- Secrets (NEVER COMMIT) ---
 .env
-
-# --- Python & Venv ---
 __pycache__/
 *.py[cod]
 *$py.class
-venv/
 ai321/
 .pytest_cache/
-
-# --- Docker & Data (Storage) ---
 docker_volumes/
 *.log
 *.sqlite
 *.db
-
-# --- ML Artifacts (Too heavy for Git) ---
-*.pkl
-*.h5
-*.pt
-
-# --- IDE ---
 .vscode/
 .idea/
