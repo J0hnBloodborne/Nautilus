@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nautilus</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <header>
+        <h1>NAUTILUS</h1>
+        <div class="user-profile">Admin</div>
+    </header>
+
+    <h2>Popular Movies</h2>
+    <div id="movie-grid" class="grid">
+        </div>
+
+    <script>
+        async function fetchMovies() {
+            const response = await fetch('/movies?limit=20');
+            const movies = await response.json();
+            const grid = document.getElementById('movie-grid');
+            
+            movies.forEach(movie => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                
+                // Using TMDB poster URL
+                const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+                
+                card.innerHTML = `
+                    <img src="${posterUrl}" class="poster" alt="${movie.title}">
+                    <div class="info">
+                        <div class="title">${movie.title}</div>
+                        <div class="rating">★ ${movie.popularity_score.toFixed(1)}</div>
+                        <a href="#" class="btn-play">WATCH</a>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+        fetchMovies();
+    </script>
+</body>
+</html>

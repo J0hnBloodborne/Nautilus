@@ -1,0 +1,98 @@
+:root {
+    --bg-main: #001021;
+    --bg-card: #034748;
+    --primary: #0CAADC;
+    --secondary: #11B5E4;
+    --text: #ffffff;
+    --radius: 8px;
+}
+
+body {
+    background-color: var(--bg-main);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 20px;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--bg-card);
+    padding-bottom: 20px;
+}
+
+h1 { color: var(--primary); text-shadow: 0 0 10px rgba(12, 170, 220, 0.4); }
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 25px;
+}
+
+.card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+    position: relative;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+    border-color: var(--secondary);
+}
+
+.poster {
+    width: 100%;
+    aspect-ratio: 2/3;
+    object-fit: cover;
+}
+
+.info {
+    padding: 15px;
+}
+
+.title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.rating {
+    font-size: 0.8rem;
+    color: var(--secondary);
+}
+
+.btn-play {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    margin-top: 10px;
+    background: var(--primary);
+    color: var(--bg-main);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    text-align: center;
+    text-decoration: none;
+}
+.btn-play:hover { background: var(--secondary); }
+
+@keyframes sonar {
+    0% { text-shadow: 0 0 5px var(--primary); }
+    50% { text-shadow: 0 0 20px var(--primary), 0 0 10px var(--secondary); }
+    100% { text-shadow: 0 0 5px var(--primary); }
+}
+
+h1 span {
+    animation: sonar 3s infinite ease-in-out;
+}

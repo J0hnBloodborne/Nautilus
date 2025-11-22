@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -20,34 +21,32 @@ def fetch_movies(pages=5):
     for page in range(1, pages + 1):
         url = f"{BASE_URL}/movie/popular?api_key={API_KEY}&language=en-US&page={page}"
         response = requests.get(url).json()
-        
         for item in response.get('results', []):
-            exists = session.query(Movie).filter_by(tmdb_id=item['id']).first()
-            if not exists:
+            if not session.query(Movie).filter_by(tmdb_id=item['id']).first():
                 movie = Movie(
                     title=item['title'],
                     tmdb_id=item['id'],
                     overview=item['overview'],
                     release_date=item.get('release_date'),
-                    genres=item.get('genre_ids'),  # Storing generic IDs for now
                     poster_path=item['poster_path'],
                     popularity_score=item['popularity'],
-                    is_downloaded=False 
+                    is_downloaded=False
                 )
                 session.add(movie)
-        
         session.commit()
-        print(f"Page {page} processed.")
+        print(f"Movie Page {page} processed.")
+        time.sleep(0.2)
 
-def fetch_shows(pages=2):
-    print(f"📺 Starting TV Show Ingestion ({pages} pages)...")
+def fetch_shows_and_episodes(pages=2):
+    print(f"Starting TV Show & Episode Ingestion ({pages} pages)...")
     for page in range(1, pages + 1):
         url = f"{BASE_URL}/tv/popular?api_key={API_KEY}&language=en-US&page={page}"
-        response = requests.get(url).json()
+        data = requests.get(url).json()
         
-        for item in response.get('results', []):
-            exists = session.query(TVShow).filter_by(tmdb_id=item['id']).first()
-            if not exists:
+        for item in data.get('results', []):
+            # 1. Create Show
+            show = session.query(TVShow).filter_by(tmdb_id=item['id']).first()
+            if not show:
                 show = TVShow(
                     title=item['name'],
                     tmdb_id=item['id'],
@@ -56,19 +55,54 @@ def fetch_shows(pages=2):
                     popularity_score=item['popularity']
                 )
                 session.add(show)
-                session.commit() # Commit show first to get ID
+                session.commit() # Commit to generate ID
                 
-                # Optional: Fetch Seasons (Keep lightweight for now)
-                # We can add deep season fetching later if needed
+                # 2. Fetch Seasons for this Show
+                print(f"      Processing Show: {show.title}...")
+                _fetch_seasons(show)
+                
+        time.sleep(0.2)
+
+def _fetch_seasons(show):
+    # Get show details to find season numbers
+    url = f"{BASE_URL}/tv/{show.tmdb_id}?api_key={API_KEY}&language=en-US"
+    details = requests.get(url).json()
     
-    print("TV Shows processed.")
+    for s_data in details.get('seasons', []):
+        season_num = s_data['season_number']
+        if season_num == 0: continue # Skip "Specials" for now
+
+        season = Season(
+            show_id=show.id,
+            season_number=season_num,
+            name=s_data['name']
+        )
+        session.add(season)
+        session.commit()
+
+        # 3. Fetch Episodes for this Season
+        _fetch_episodes(show.tmdb_id, season)
+
+def _fetch_episodes(tmdb_show_id, season):
+    url = f"{BASE_URL}/tv/{tmdb_show_id}/season/{season.season_number}?api_key={API_KEY}&language=en-US"
+    ep_data = requests.get(url).json()
+    
+    for ep in ep_data.get('episodes', []):
+        episode = Episode(
+            season_id=season.id,
+            episode_number=ep['episode_number'],
+            title=ep['name'],
+            overview=ep['overview'],
+            is_downloaded=False
+        )
+        session.add(episode)
+    session.commit()
+    print(f"         > S{season.season_number} fetched ({len(ep_data.get('episodes', []))} eps)")
 
 if __name__ == "__main__":
-    print("Connecting to AI321 Database...")
     try:
         fetch_movies()
-        fetch_shows()
-        print("\n INGESTION COMPLETE. Your database is now populated.")
+        fetch_shows_and_episodes()
+        print("INGESTION COMPLETE.")
     except Exception as e:
         print(f"ERROR: {e}")
-        print("Tip: Check if your VPN is blocking the API or if the Key is correct.")

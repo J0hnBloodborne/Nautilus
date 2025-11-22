@@ -1,14 +1,16 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.staticfiles import StaticFiles # Import this
+from fastapi.responses import FileResponse # Import this
 from sqlalchemy.orm import Session
-from typing import List, Optional
 from database import get_db
 import models
 
 app = FastAPI(
-    title="AI321 Project API",
+    title="Nautilus AI321 Media Streaming MLOps System",
     description="End-to-End MLOps Pipeline for Media Streaming",
     version="1.0.0"
 )
+app.mount("/static", StaticFiles(directory="src/static"), name="static")
 
 @app.get("/")
 def read_root():
