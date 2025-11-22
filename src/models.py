@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Text, JSON, DateTime, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Text, JSON, DateTime, Boolean, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 
@@ -43,21 +43,36 @@ class TVShow(Base):
 
 class Season(Base):
     __tablename__ = 'seasons'
+    __table_args__ = (
+        UniqueConstraint('show_id', 'season_number', name='uix_show_season'),
+    )
     id = Column(Integer, primary_key=True)
     show_id = Column(Integer, ForeignKey('tv_shows.id'))
     season_number = Column(Integer)
     name = Column(String)
-    
+    air_date = Column(String)  # Optional: season first air date
+
     show = relationship("TVShow", back_populates="seasons")
-    episodes = relationship("Episode", back_populates="season", cascade="all, delete-orphan")
+    episodes = relationship(
+        "Episode",
+        back_populates="season",
+        cascade="all, delete-orphan",
+        order_by="Episode.episode_number"
+    )
 
 class Episode(Base):
     __tablename__ = 'episodes'
+    __table_args__ = (
+        UniqueConstraint('season_id', 'episode_number', name='uix_season_episode'),
+    )
     id = Column(Integer, primary_key=True)
     season_id = Column(Integer, ForeignKey('seasons.id'))
     episode_number = Column(Integer)
     title = Column(String)
     overview = Column(Text)
+    runtime_minutes = Column(Integer)  # From TMDB episode runtime
+    air_date = Column(String)
+    still_path = Column(String)  # Episode still image path
     
     # File Management
     stream_url = Column(String)

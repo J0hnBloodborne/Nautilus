@@ -15,7 +15,7 @@ engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 session = Session()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 def create_fake_users(n=50):
     print(f"Cloning {n} synthetic users...")
@@ -43,7 +43,7 @@ def create_fake_users(n=50):
     return session.query(User).all()
 
 def create_fake_interactions(users, min_ratings=5, max_ratings=20):
-    print("⭐ Generating synthetic viewing habits...")
+    print("Generating synthetic viewing habits...")
     movies = session.query(Movie).all()
     
     if not movies:
@@ -70,7 +70,7 @@ def create_fake_interactions(users, min_ratings=5, max_ratings=20):
             count += 1
             
     session.commit()
-    print(f"   ✅ Generated {count} interactions.")
+    print(f"Generated {count} interactions.")
 
 if __name__ == "__main__":
     print("INITIATING SYNTHETIC DATA GENERATION...")

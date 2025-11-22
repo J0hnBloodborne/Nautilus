@@ -3,45 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nautilus</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>Nautilus | Deep Dive</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;900&display=swap" rel="stylesheet">
 </head>
 <body>
 
     <header>
-        <h1>NAUTILUS</h1>
-        <div class="user-profile">Admin</div>
-    </header>
-
-    <h2>Popular Movies</h2>
-    <div id="movie-grid" class="grid">
+        <div class="center-title">NAUTILUS</div>
+        <div class="tabs-bar">
+            <button class="tab-btn active" data-tab="movies">MOVIES</button>
+            <button class="tab-btn" data-tab="shows">SERIES</button>
         </div>
+    </header>
+    <main id="content-area"></main>
 
-    <script>
-        async function fetchMovies() {
-            const response = await fetch('/movies?limit=20');
-            const movies = await response.json();
-            const grid = document.getElementById('movie-grid');
-            
-            movies.forEach(movie => {
-                const card = document.createElement('div');
-                card.className = 'card';
-                
-                // Using TMDB poster URL
-                const posterUrl = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
-                
-                card.innerHTML = `
-                    <img src="${posterUrl}" class="poster" alt="${movie.title}">
-                    <div class="info">
-                        <div class="title">${movie.title}</div>
-                        <div class="rating">★ ${movie.popularity_score.toFixed(1)}</div>
-                        <a href="#" class="btn-play">WATCH</a>
-                    </div>
-                `;
-                grid.appendChild(card);
-            });
-        }
-        fetchMovies();
-    </script>
+    <div id="modal" class="modal-overlay" onclick="backdropClose(event)">
+        <div id="modal-glass" class="modal-glass">
+            <button class="close-btn" onclick="closeModal()">×</button>
+            <img id="m-poster" src="" class="m-poster" alt="Poster">
+            <div class="m-info">
+                <h2 id="m-title">Title</h2>
+                <div class="m-meta">
+                    <span id="m-year">2024</span> • <span id="m-score" class="accent">98% Match</span>
+                </div>
+                <p id="m-desc">Description goes here...</p>
+                <div class="actions">
+                    <button class="action-btn primary" id="play-btn">▶ PLAY</button>
+                    <button class="action-btn secondary" id="list-btn">+ LIST</button>
+                </div>
+                <div id="m-episodes" class="hidden">
+                    <h3>Seasons & Episodes</h3>
+                    <div id="ep-list" class="ep-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
 </body>
 </html>
