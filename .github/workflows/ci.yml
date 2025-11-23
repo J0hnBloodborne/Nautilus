@@ -50,4 +50,5 @@ jobs:
         DATABASE_URL: postgresql://admin:password123@localhost:5432/ai321_test
         TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }} 
       run: |
-        pytest
+        # Using 'python -m' adds the current folder to the Python Path
+        python -m pytest
