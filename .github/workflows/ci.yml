@@ -1,0 +1,53 @@
+name: Nautilus CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    # 1. Spin up a temporary database for testing
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: password123
+          POSTGRES_DB: ai321_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install exact dependencies needed for the app
+        pip install fastapi uvicorn sqlalchemy psycopg2-binary requests python-dotenv passlib bcrypt faker pandas scikit-learn joblib httpx pytest ruff
+
+    - name: Lint Code
+      run: |
+        # Check for messy code but don't fail the build on minor styling
+        ruff check src/ --ignore E501
+
+    - name: Run Tests
+      env:
+        DATABASE_URL: postgresql://admin:password123@localhost:5432/ai321_test
+        TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }} 
+      run: |
+        pytest
