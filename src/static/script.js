@@ -1,14 +1,9 @@
-// Base API path (relative since FastAPI serves at root)
 const API_BASE = "";
-
-// State
 let currentTab = 'movies';
+var videoPlayer = null;
 
-function init() {
-    loadContent(currentTab);
-}
+function init() { loadContent(currentTab); }
 
-// Tab switching logic for new layout
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', function() {
@@ -23,25 +18,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadContent(type) {
     const container = document.getElementById('content-area');
-    container.innerHTML = '<div style="padding:40px">Loading catalog...</div>';
-
+    container.innerHTML = '<div style="padding:40px; text-align:center;">Loading catalog...</div>';
     try {
         const res = await fetch(`/${type}?limit=60`);
         const items = await res.json();
         container.innerHTML = '';
-
-        // Simple categorization heuristics (can be replaced with real metadata later)
-        const trending = items.slice(0, 15);
-        const newReleases = items.slice(15, 30);
-        const topRated = items.slice(30, 45);
-        const vault = items.slice(45);
-
-        createRow('Trending Now', trending);
-        createRow('New Releases', newReleases);
-        createRow('Top Rated', topRated);
-        if (vault.length) createRow('From The Vault', vault);
+        
+        createRow('Trending Now', items.slice(0, 15));
+        createRow('New Releases', items.slice(15, 30));
+        createRow('Top Rated', items.slice(30, 45));
+        createRow('From The Vault', items.slice(45));
     } catch (err) {
-        container.innerHTML = `<div style="padding:40px;color:#f55">Failed to load: ${err}</div>`;
+        container.innerHTML = `<div style="padding:40px;color:#f55">Error: ${err}</div>`;
     }
 }
 
@@ -50,7 +38,6 @@ function createRow(title, items) {
     const section = document.createElement('section');
     section.className = 'row-wrapper';
     section.innerHTML = `<div class="row-title">${title}</div>`;
-
     const scroller = document.createElement('div');
     scroller.className = 'row-scroller';
 
@@ -58,21 +45,20 @@ function createRow(title, items) {
         const card = document.createElement('div');
         card.className = 'card';
         card.onclick = () => openModal(item);
-        const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450?text=No+Image';
-        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${item.title}">`;
+        const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/360x540';
+        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy">`;
         scroller.appendChild(card);
     });
 
-    // Navigation arrows (now further out)
     const prevBtn = document.createElement('button');
     prevBtn.className = 'row-arrow prev';
     prevBtn.innerHTML = '&#8249;';
-    prevBtn.onclick = () => scroller.scrollBy({ left: - (getScrollAmount()), behavior: 'smooth' });
-
+    prevBtn.onclick = () => scroller.scrollBy({ left: -1000, behavior: 'smooth' });
+    
     const nextBtn = document.createElement('button');
     nextBtn.className = 'row-arrow next';
     nextBtn.innerHTML = '&#8250;';
-    nextBtn.onclick = () => scroller.scrollBy({ left: getScrollAmount(), behavior: 'smooth' });
+    nextBtn.onclick = () => scroller.scrollBy({ left: 1000, behavior: 'smooth' });
 
     section.appendChild(prevBtn);
     section.appendChild(nextBtn);
@@ -80,32 +66,29 @@ function createRow(title, items) {
     container.appendChild(section);
 }
 
-function getScrollAmount() {
-    // Approx width of 6 cards including gaps
-    const card = document.querySelector('.card');
-    if (!card) return 1000;
-    const style = getComputedStyle(card);
-    const cardWidth = card.offsetWidth + parseInt(style.marginLeft || 0) + parseInt(style.marginRight || 0) + 32; // add gap fallback
-    return cardWidth * 6;
-}
-
-// --- MODAL LOGIC ---
+// --- MODAL ---
 function openModal(item) {
     const modal = document.getElementById('modal');
+    const modalContent = document.getElementById('modal-content-wrapper');
+    
+    // CRITICAL: Ensure Grid Layout is visible
+    modalContent.style.display = 'grid'; 
+    document.getElementById('player-wrapper').classList.add('hidden');
+
     document.getElementById('m-title').textContent = item.title;
     document.getElementById('m-desc').textContent = item.overview || 'No description available.';
-    document.getElementById('m-poster').src = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/350x500?text=No+Image';
-    // Popularity/match formatting
+    document.getElementById('m-poster').src = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/360x540';
+    
     let score = '';
     if (typeof item.popularity_score === 'number') {
-        let val = item.popularity_score;
-        // If appears to be a 0-1 float, scale
-        if (val <= 1) val = val * 100;
-        val = Math.max(0, Math.min(100, Math.round(val)));
-        score = `${val}% Match`;
+        let val = item.popularity_score > 1 ? item.popularity_score : item.popularity_score * 100;
+        score = `${Math.round(val)}% Match`;
     }
     document.getElementById('m-score').textContent = score;
-    document.getElementById('m-year').textContent = (item.release_date || '').split('-')[0] || '';
+    document.getElementById('m-year').textContent = (item.release_date || '').split('-')[0];
+
+    const playBtn = document.querySelector('#play-btn');
+    playBtn.onclick = () => playVideo(currentTab === 'shows' ? 'tv' : 'movie', item.tmdb_id);
 
     const epSection = document.getElementById('m-episodes');
     if (currentTab === 'shows') {
@@ -114,12 +97,12 @@ function openModal(item) {
     } else {
         epSection.classList.add('hidden');
     }
-
     modal.classList.add('active');
 }
 
 function closeModal() {
     document.getElementById('modal').classList.remove('active');
+    closePlayer();
 }
 
 function backdropClose(e) {
@@ -128,41 +111,57 @@ function backdropClose(e) {
 
 async function loadSeasons(showId) {
     const list = document.getElementById('ep-list');
-    list.innerHTML = '<div style="padding:10px">Loading seasons...</div>';
+    list.innerHTML = 'Loading...';
     try {
         const res = await fetch(`/shows/${showId}/seasons`);
-        if (!res.ok) throw new Error('Endpoint error');
         const data = await res.json();
-        // Ensure seasons structure
-        renderSeasons(Array.isArray(data.seasons) ? data.seasons : []);
-    } catch (err) {
-        list.innerHTML = `<div style="padding:10px;color:#f55">Failed to load seasons: ${err}</div>`;
-    }
-}
-
-function renderSeasons(seasons) {
-    const list = document.getElementById('ep-list');
-    list.innerHTML = '';
-    if (!seasons.length) {
-        list.innerHTML = '<div style="padding:10px;color:#aaa">No seasons available.</div>';
-        return;
-    }
-    seasons.forEach(season => {
-        const header = document.createElement('div');
-        header.style.padding = '10px';
-        header.style.fontWeight = '600';
-        header.style.color = '#fff';
-        header.textContent = `Season ${season.season_number || ''}: ${season.name || ''}`;
-        list.appendChild(header);
-        (season.episodes || []).forEach(ep => {
-            const epDiv = document.createElement('div');
-            epDiv.className = 'ep-item';
-            const duration = '45m'; // Placeholder; backend has no duration field
-            epDiv.innerHTML = `<span>Ep ${ep.episode_number}: ${ep.title || 'Untitled'}</span><span style="color:#999">${duration}</span>`;
-            list.appendChild(epDiv);
+        list.innerHTML = '';
+        const seasons = data.seasons || [];
+        
+        seasons.forEach(season => {
+            const div = document.createElement('div');
+            div.innerHTML = `<div style="font-weight:bold; margin:15px 0 5px; color:#fff">Season ${season.season_number}</div>`;
+            (season.episodes || []).forEach(ep => {
+                const row = document.createElement('div');
+                row.className = 'ep-item';
+                row.innerHTML = `<span>${ep.episode_number}. ${ep.title}</span> <span>▶</span>`;
+                row.onclick = () => playVideo('tv', currentTmdbId, season.season_number, ep.episode_number);
+                div.appendChild(row);
+            });
+            list.appendChild(div);
         });
-    });
+    } catch (err) {
+        list.innerHTML = 'Error loading episodes';
+    }
 }
 
-// Initialize after DOM load
+// --- PLAYER ---
+async function playVideo(type, tmdbId, season=1, episode=1) {
+    const btn = document.querySelector('#play-btn');
+    btn.innerText = "CONNECTING...";
+    
+    try {
+        const rawUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+        const proxyUrl = `/proxy_stream?url=${encodeURIComponent(rawUrl)}`;
+
+        // Toggle UI
+        document.getElementById('modal-content-wrapper').style.display = 'none';
+        document.getElementById('player-wrapper').classList.remove('hidden');
+
+        if (!videoPlayer) videoPlayer = videojs('my-video');
+        
+        videoPlayer.src({ type: 'video/mp4', src: proxyUrl });
+        videoPlayer.play();
+        btn.innerText = "▶ PLAY";
+    } catch (e) {
+        btn.innerText = "ERROR";
+    }
+}
+
+function closePlayer() {
+    if (videoPlayer) videoPlayer.pause();
+    document.getElementById('player-wrapper').classList.add('hidden');
+    document.getElementById('modal-content-wrapper').style.display = 'grid';
+}
+
 document.addEventListener('DOMContentLoaded', init);

@@ -10,6 +10,11 @@ import os
 import time
 import requests
 from dotenv import load_dotenv
+from src.scrapers.vidsrc import VidSrcScraper
+import httpx
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+
 load_dotenv()
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 
@@ -298,3 +303,30 @@ def admin_reset(db: Session = Depends(get_db)):
     models.Base.metadata.drop_all(engine)
     models.Base.metadata.create_all(engine)
     return {"status": "reset-complete"}
+
+@app.get("/play/{media_type}/{tmdb_id}")
+async def play_content(media_type: str, tmdb_id: int, season: int = 1, episode: int = 1):
+    """
+    The Link Hunter:
+    Accepts a TMDB ID and returns a valid streaming URL.
+    """
+    scraper = VidSrcScraper()
+    url = await scraper.get_stream(tmdb_id, media_type, season, episode)
+    
+    if not url:
+        raise HTTPException(status_code=404, detail="No stream found on the High Seas")
+    
+    return {"url": url}
+
+@app.get("/proxy_stream")
+async def proxy_stream(url: str, request: Request):
+    client = httpx.AsyncClient()
+    headers = { "User-Agent": "Mozilla/5.0" } # Simple headers
+    req = client.build_request("GET", url, headers=headers)
+    r = await client.send(req, stream=True)
+    return StreamingResponse(
+        r.aiter_bytes(), 
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type"),
+        background=client.aclose
+    )
