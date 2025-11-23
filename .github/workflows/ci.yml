@@ -56,3 +56,13 @@ jobs:
         
         # 2. NOW run the tests
         python -m pytest
+
+package-delivery:
+  needs: build-and-test
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v3  
+    - name: Build Docker Image
+        run: |
+          docker build -t nautilus-app:${{ github.sha }} .
+          echo "Docker Image Built Successfully"
