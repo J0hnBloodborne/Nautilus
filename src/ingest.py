@@ -4,7 +4,7 @@ import requests
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
-from models import Base, Movie, TVShow
+from models import Movie, TVShow
 
 load_dotenv()
 API_KEY = os.getenv("TMDB_API_KEY")
