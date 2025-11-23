@@ -47,8 +47,12 @@ jobs:
 
     - name: Run Tests
       env:
+        # NOTE: This matches the service container we defined at the top
         DATABASE_URL: postgresql://admin:password123@localhost:5432/ai321_test
         TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }} 
       run: |
-        # Using 'python -m' adds the current folder to the Python Path
+        # 1. Initialize the Database (Create Tables)
+        python -m src.models
+        
+        # 2. NOW run the tests
         python -m pytest
