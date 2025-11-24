@@ -1,7 +1,12 @@
 const API_BASE = "";
 let currentTab = 'movies';
-var videoPlayer = null;
+var art = null; // ArtPlayer instance
+var currentTmdbId = null;
+var currentSeason = 1;
+var currentEpisode = 1;
+var currentType = 'movie';
 
+// --- INIT ---
 function init() { loadContent(currentTab); }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -13,8 +18,33 @@ document.addEventListener('DOMContentLoaded', () => {
             loadContent(currentTab);
         });
     });
+    
+    // Search Listener
+    document.getElementById('search-input').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') runSearch();
+    });
+    
     loadContent(currentTab);
 });
+
+async function runSearch() {
+    const query = document.getElementById('search-input').value;
+    if (!query) return;
+    const container = document.getElementById('content-area');
+    container.innerHTML = '<div style="padding:40px; text-align:center">Hunting...</div>';
+    try {
+        const res = await fetch(`/search?query=${encodeURIComponent(query)}`);
+        const items = await res.json();
+        container.innerHTML = '';
+        if (items.length === 0) {
+            container.innerHTML = '<div style="padding:40px; text-align:center">No signals found.</div>';
+            return;
+        }
+        createRow(`Results for "${query}"`, items);
+    } catch (err) {
+        container.innerHTML = `<div style="padding:40px;color:#f55">Error: ${err}</div>`;
+    }
+}
 
 async function loadContent(type) {
     const container = document.getElementById('content-area');
@@ -45,7 +75,7 @@ function createRow(title, items) {
         const card = document.createElement('div');
         card.className = 'card';
         card.onclick = () => openModal(item);
-        const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/360x540';
+        const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450';
         card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy">`;
         scroller.appendChild(card);
     });
@@ -54,7 +84,6 @@ function createRow(title, items) {
     prevBtn.className = 'row-arrow prev';
     prevBtn.innerHTML = '&#8249;';
     prevBtn.onclick = () => scroller.scrollBy({ left: -1000, behavior: 'smooth' });
-    
     const nextBtn = document.createElement('button');
     nextBtn.className = 'row-arrow next';
     nextBtn.innerHTML = '&#8250;';
@@ -71,7 +100,6 @@ function openModal(item) {
     const modal = document.getElementById('modal');
     const modalContent = document.getElementById('modal-content-wrapper');
     
-    // CRITICAL: Ensure Grid Layout is visible
     modalContent.style.display = 'grid'; 
     document.getElementById('player-wrapper').classList.add('hidden');
 
@@ -87,8 +115,14 @@ function openModal(item) {
     document.getElementById('m-score').textContent = score;
     document.getElementById('m-year').textContent = (item.release_date || '').split('-')[0];
 
+    // SAVE STATE
+    currentTmdbId = item.tmdb_id;
+    currentType = currentTab === 'shows' ? 'tv' : 'movie';
+    currentSeason = 1;
+    currentEpisode = 1;
+
     const playBtn = document.querySelector('#play-btn');
-    playBtn.onclick = () => playVideo(currentTab === 'shows' ? 'tv' : 'movie', item.tmdb_id);
+    playBtn.onclick = () => playVideo(currentType, currentTmdbId);
 
     const epSection = document.getElementById('m-episodes');
     if (currentTab === 'shows') {
@@ -135,33 +169,118 @@ async function loadSeasons(showId) {
     }
 }
 
-// --- PLAYER ---
+// --- PLAYER LOGIC ---
+// --- PLAYER LOGIC ---
 async function playVideo(type, tmdbId, season=1, episode=1) {
+    currentTmdbId = tmdbId;
+    currentType = type;
+    currentSeason = season;
+    currentEpisode = episode;
+
     const btn = document.querySelector('#play-btn');
-    btn.innerText = "CONNECTING...";
+    const originalText = btn.innerText;
+    btn.innerText = "HUNTING...";
     
+    // Switch UI to Player Mode
+    document.getElementById('modal-content-wrapper').style.display = 'none';
+    document.getElementById('player-wrapper').classList.remove('hidden');
+
+    // Default to Auto-Hunt
+    await loadSource('auto');
+    
+    btn.innerText = originalText;
+}
+
+function changeSource(provider) {
+    loadSource(provider);
+}
+
+async function loadSource(provider) {
+    const artContainer = document.getElementById('artplayer-app');
+    const iframe = document.getElementById('embed-frame');
+    const select = document.getElementById('source-select');
+    
+    // 1. HARD RESET
+    artContainer.style.display = 'none';
+    iframe.classList.add('hidden');
+    iframe.src = "about:blank"; // Clear previous video audio/state
+    if(art) art.pause();
+
+    // Show loading state in selector
+    const prevLabel = select.options[select.selectedIndex].text;
+    select.options[select.selectedIndex].text = "Hunting...";
+
     try {
-        const rawUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-        const proxyUrl = `/proxy_stream?url=${encodeURIComponent(rawUrl)}`;
+        // Pass 'auto' or specific provider name
+        const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
+        const res = await fetch(apiUrl);
+        const data = await res.json();
 
-        // Toggle UI
-        document.getElementById('modal-content-wrapper').style.display = 'none';
-        document.getElementById('player-wrapper').classList.remove('hidden');
+        // Restore label
+        select.options[select.selectedIndex].text = prevLabel;
 
-        if (!videoPlayer) videoPlayer = videojs('my-video');
-        
-        videoPlayer.src({ type: 'video/mp4', src: proxyUrl });
-        videoPlayer.play();
-        btn.innerText = "▶ PLAY";
+        if (data.type === 'embed') {
+            // --- EMBED MODE ---
+            console.log("Playing Embed:", data.source);
+            iframe.classList.remove('hidden');
+            iframe.src = data.url;
+            
+            // Alert user what source won
+            if(provider === 'auto') {
+               // Update dropdown to show what we found? Optional.
+               console.log(`Auto-Hunt found: ${data.source}`);
+            }
+        } else {
+            // --- DIRECT MODE ---
+            artContainer.style.display = 'block';
+            if (!art) initArtPlayer();
+            
+            const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
+            art.switchUrl(proxyUrl);
+        }
     } catch (e) {
-        btn.innerText = "ERROR";
+        console.error(e);
+        select.options[select.selectedIndex].text = "Failed";
+        setTimeout(() => select.options[select.selectedIndex].text = prevLabel, 2000);
     }
 }
 
+function initArtPlayer() {
+    art = new Artplayer({
+        container: '#artplayer-app',
+        url: '',
+        theme: '#0CAADC',
+        volume: 1.0,
+        isLive: false,
+        muted: false,
+        autoplay: true,
+        pip: true,
+        autoSize: true,
+        autoMini: true,
+        screenshot: true,
+        setting: true,
+        loop: false,
+        flip: true,
+        playbackRate: true,
+        aspectRatio: true,
+        
+        // FULLSCREEN FIX: Target the wrapper, not the window
+        fullscreen: true,
+        fullscreenWeb: true,
+        
+        miniProgressBar: true,
+        mutex: true,
+        backdrop: true,
+        playsInline: true,
+        autoPlayback: true,
+        airplay: true,
+        theme: '#23ade5',
+    });
+}
+
 function closePlayer() {
-    if (videoPlayer) videoPlayer.pause();
+    if (art) art.pause();
+    document.getElementById('embed-frame').src = "about:blank"; // Stop audio
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('modal-content-wrapper').style.display = 'grid';
 }
-
-document.addEventListener('DOMContentLoaded', init);

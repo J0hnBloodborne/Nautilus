@@ -104,4 +104,128 @@ main { margin-top: 0; padding: 0 80px 100px; }
 }
 #player-wrapper button:hover { border-color: var(--accent); color: var(--accent); }
 
+/* --- PLAYER CONTROLS (The "Cockpit") --- */
+.player-controls {
+    position: fixed !important; /* Stay visible even in fullscreen */
+    top: 0; 
+    left: 0; 
+    width: 100%;
+    padding: 20px 35px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, transparent 100%);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 9998; /* Just below exit button */
+    opacity: 0; 
+    transition: opacity 0.3s ease;
+    pointer-events: none; /* Let clicks pass through to video... */
+}
+
+/* ... but enable clicks on the buttons themselves */
+.player-controls > * { pointer-events: auto; }
+
+/* Show on hover */
+#player-wrapper:hover .player-controls { opacity: 1; }
+
+/* Source Select Styles */
+.source-select {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #fff;
+    padding: 8px 15px;
+    border-radius: 6px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9rem;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+    outline: none;
+}
+.source-select:hover { background: rgba(255,255,255,0.2); }
+.source-select option { background: #000; color: white; }
+
+/* Exit Button */
+.exit-btn {
+    /* Fixed Position relative to VIEWPORT, not parent */
+    position: fixed !important; 
+    top: 25px; 
+    right: 35px; 
+    z-index: 9999; /* Nuclear option */
+    
+    background: rgba(220, 20, 60, 0.9);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    cursor: pointer;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
+    transition: transform 0.2s, background 0.2s;
+}
+.exit-btn:hover { 
+    transform: scale(1.05); 
+    background: #ff1a40; 
+}
+
+/* IFRAME Styling (Full size) */
+#embed-frame { width: 100%; height: 100%; border: none; background: #000; }
+
 .hidden { display: none !important; }
+
+.header-content {
+    display: flex; flex-direction: column; align-items: center; gap: 30px;
+    width: 100%; max-width: 1200px; margin: 0 auto;
+}
+
+.brand { 
+    padding-top: 2%;
+    font-size: 2.5rem; font-weight: 900; letter-spacing: 8px; 
+    color: var(--text); text-shadow: 0 0 20px rgba(12, 170, 220, 0.3);
+}
+
+/* SEARCH BAR */
+.search-bar {
+    display: flex; align-items: center;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--glass-border);
+    border-radius: 50px;
+    padding: 5px 20px;
+    width: 400px; max-width: 90%;
+    backdrop-filter: blur(10px);
+    transition: 0.3s;
+}
+.search-bar:focus-within {
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 15px rgba(12, 170, 220, 0.3);
+    border-color: var(--accent);
+}
+
+#search-input {
+    background: transparent; border: none; color: white;
+    font-size: 1rem; flex: 1; padding: 10px; outline: none;
+}
+#search-input::placeholder { color: #aaa; }
+
+.search-bar button {
+    background: none; border: none; font-size: 1.2rem; cursor: pointer;
+    transition: transform 0.2s;
+}
+.search-bar button:hover { transform: scale(1.1); }
+
+/* --- NUCLEAR FULLSCREEN FIX --- */
+/* This forces ArtPlayer to sit on top of EVERYTHING when in Web Fullscreen */
+.art-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 2147483647 !important; /* Max Integer */
+    background: black !important;
+}
+
+/* Ensure the container doesn't restrict it */
+.art-fullscreen .art-video {
+    object-fit: contain !important;
+}

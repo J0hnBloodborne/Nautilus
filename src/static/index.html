@@ -6,50 +6,79 @@
     <title>Nautilus | Deep Dive</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;900&display=swap" rel="stylesheet">
-    <link href="https://vjs.zencdn.net/8.3.0/video-js.css" rel="stylesheet" />
-    <script src="https://vjs.zencdn.net/8.3.0/video.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
 </head>
 <body>
 
     <header>
-        <div class="center-title">NAUTILUS</div>
-        <div class="tabs-bar">
-            <button class="tab-btn active" data-tab="movies">MOVIES</button>
-            <button class="tab-btn" data-tab="shows">SERIES</button>
+        <div class="header-content">
+            <div class="brand">NAUTILUS</div>
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search the archives...">
+                <button onclick="runSearch()">🔍</button>
+            </div>
+            <div class="tabs-bar">
+                <button class="tab-btn active" data-tab="movies">MOVIES</button>
+                <button class="tab-btn" data-tab="shows">SERIES</button>
+            </div>
         </div>
     </header>
     
-    <main id="content-area">
-        </main>
+    <main id="content-area"></main>
 
     <div id="modal" class="modal-overlay" onclick="backdropClose(event)">
         <div id="modal-glass" class="modal-glass">
             
             <div id="player-wrapper" class="hidden" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 50;">
-                <video id="my-video" class="video-js vjs-default-skin vjs-big-play-centered" controls preload="auto" style="width: 100%; height: 100%;"></video>
-                <button onclick="closePlayer()" style="position: absolute; top: 20px; right: 20px; z-index: 60; background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; cursor: pointer; border-radius: 4px; font-weight: bold; backdrop-filter: blur(4px);">
-                    ✕ EXIT THEATER
-                </button>
+                
+                <div class="player-controls">
+                    <div style="display:flex; gap:15px; align-items:center;">
+                        <span style="color:rgba(255,255,255,0.5); font-weight:bold;">SIGNAL:</span>
+                        <select id="source-select" class="source-select" onchange="changeSource(this.value)">
+                            <option value="auto">⚡ Auto-Hunt (Best)</option>
+                            
+                            <option disabled>--- TIER 1 (FAST) ---</option>
+                            <option value="VidSrc.to">VidSrc.to</option>
+                            <option value="VidSrc.pro">VidSrc.pro</option>
+                            <option value="VidLink">VidLink</option>
+                            
+                            <option disabled>--- TIER 2 (BACKUP) ---</option>
+                            <option value="SuperEmbed">SuperEmbed</option>
+                            <option value="2Embed">2Embed</option>
+                            <option value="Vidsrc.net">Vidsrc.net</option>
+                            <option value="Vidsrc.vip">Vidsrc.vip</option>
+                            
+                            <option disabled>--- TIER 3 (LAST RESORT) ---</option>
+                            <option value="Smashy">Smashy</option>
+                            <option value="NontonGo">NontonGo</option>
+                            <option value="AniVid">AniVid</option>
+                            <option value="AutoEmbed">AutoEmbed</option>
+                        </select>
+                    </div>
+                    
+                    <button class="exit-btn" onclick="closePlayer()">EXIT</button>
+                </div>
+
+                <div id="artplayer-app" style="width: 100%; height: 100%;"></div>
+                
+                <iframe id="embed-frame" class="hidden"></iframe>
             </div>
 
-            <div id="modal-content-wrapper">
-                
+            <div id="modal-content-wrapper" style="display: grid; grid-template-columns: 350px 1fr; width: 100%; height: 100%;">
                 <button class="close-btn" onclick="closeModal()">×</button>
-                
                 <img id="m-poster" src="" class="m-poster" alt="Poster">
-                
                 <div class="m-info">
                     <h2 id="m-title">Title</h2>
                     <div class="m-meta">
                         <span id="m-year">2024</span> • <span id="m-score" class="accent">98% Match</span>
                     </div>
                     <p id="m-desc">Description goes here...</p>
-                    
                     <div class="actions">
                         <button class="action-btn primary" id="play-btn">▶ PLAY</button>
                         <button class="action-btn secondary" id="list-btn">+ LIST</button>
                     </div>
-                    
                     <div id="m-episodes" class="hidden">
                         <h3>Seasons & Episodes</h3>
                         <div id="ep-list" class="ep-list"></div>
