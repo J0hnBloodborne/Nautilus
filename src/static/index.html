@@ -6,7 +6,6 @@
     <title>Nautilus | Deep Dive</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;900&display=swap" rel="stylesheet">
-    
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
 </head>
@@ -14,11 +13,17 @@
 
     <header>
         <div class="header-content">
-            <div class="brand">NAUTILUS</div>
-            <div class="search-bar">
-                <input type="text" id="search-input" placeholder="Search the archives...">
-                <button onclick="runSearch()">🔍</button>
+            <div class="center-title">NAUTILUS</div>
+            
+            <div class="search-container">
+                <div class="search-bar">
+                    <input type="text" id="search-input" placeholder="Search the archives..." autocomplete="off">
+                    <button id="clear-btn" class="search-clear" onclick="clearSearch()">✕</button>
+                    <button onclick="runSearch()" style="background:none;border:none;cursor:pointer;font-size:1.2rem">🔍</button>
+                </div>
+                <div id="live-results" class="live-dropdown hidden"></div>
             </div>
+
             <div class="tabs-bar">
                 <button class="tab-btn active" data-tab="movies">MOVIES</button>
                 <button class="tab-btn" data-tab="shows">SERIES</button>
@@ -31,42 +36,34 @@
     <div id="modal" class="modal-overlay" onclick="backdropClose(event)">
         <div id="modal-glass" class="modal-glass">
             
-            <div id="player-wrapper" class="hidden" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 50;">
-                
+            <div id="player-wrapper" class="hidden">
                 <div class="player-controls">
-                    <div style="display:flex; gap:15px; align-items:center;">
-                        <span style="color:rgba(255,255,255,0.5); font-weight:bold;">SIGNAL:</span>
-                        <select id="source-select" class="source-select" onchange="changeSource(this.value)">
-                            <option value="auto">⚡ Auto-Hunt (Best)</option>
-                            
-                            <option disabled>--- TIER 1 (FAST) ---</option>
+                    <select id="source-select" class="source-select" onchange="changeSource(this.value)">
+                        <option value="auto">⚡ Auto-Hunt</option>
+                        <optgroup label="Tier 1">
+                            <option value="VidLink">VidLink</option>
                             <option value="VidSrc.to">VidSrc.to</option>
                             <option value="VidSrc.pro">VidSrc.pro</option>
-                            <option value="VidLink">VidLink</option>
-                            
-                            <option disabled>--- TIER 2 (BACKUP) ---</option>
+                        </optgroup>
+                        <optgroup label="Tier 2">
                             <option value="SuperEmbed">SuperEmbed</option>
                             <option value="2Embed">2Embed</option>
                             <option value="Vidsrc.net">Vidsrc.net</option>
-                            <option value="Vidsrc.vip">Vidsrc.vip</option>
-                            
-                            <option disabled>--- TIER 3 (LAST RESORT) ---</option>
+                        </optgroup>
+                        <optgroup label="Tier 3">
                             <option value="Smashy">Smashy</option>
                             <option value="NontonGo">NontonGo</option>
-                            <option value="AniVid">AniVid</option>
                             <option value="AutoEmbed">AutoEmbed</option>
-                        </select>
-                    </div>
-                    
+                        </optgroup>
+                    </select>
                     <button class="exit-btn" onclick="closePlayer()">EXIT</button>
                 </div>
 
                 <div id="artplayer-app" style="width: 100%; height: 100%;"></div>
-                
                 <iframe id="embed-frame" class="hidden"></iframe>
             </div>
 
-            <div id="modal-content-wrapper" style="display: grid; grid-template-columns: 350px 1fr; width: 100%; height: 100%;">
+            <div id="modal-content-wrapper">
                 <button class="close-btn" onclick="closeModal()">×</button>
                 <img id="m-poster" src="" class="m-poster" alt="Poster">
                 <div class="m-info">
@@ -80,7 +77,7 @@
                         <button class="action-btn secondary" id="list-btn">+ LIST</button>
                     </div>
                     <div id="m-episodes" class="hidden">
-                        <h3>Seasons & Episodes</h3>
+                        <h3>SEASONS</h3>
                         <div id="ep-list" class="ep-list"></div>
                     </div>
                 </div>
