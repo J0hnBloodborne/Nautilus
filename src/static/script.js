@@ -1,103 +1,149 @@
 const API_BASE = "";
-let currentTab = 'movies';
-var art = null; // ArtPlayer instance
-var currentTmdbId = null;
-var currentSeason = 1;
-var currentEpisode = 1;
-var currentType = 'movie';
-// Track whether we're showing search results
-let isSearchActive = false;
+var art = null;
+var currentTmdbId = null, currentSeason = 1, currentEpisode = 1, currentType = 'movie';
+let searchTimeout;
 
 // --- INIT ---
-function init() { loadContent(currentTab); }
-
 document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            currentTab = this.dataset.tab;
-            // leaving search clears back to normal content
-            isSearchActive = false;
-            document.getElementById('search-input').value = '';
-            toggleSearchClear(false);
-            loadContent(currentTab);
-        });
+    // Load initial content into the browse section
+    loadHome();
+    
+    // Search Input Logic
+    const input = document.getElementById('search-input');
+    const dropdown = document.getElementById('live-results');
+
+    // 1. Live Search Listener
+    input.addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        const query = e.target.value.trim();
+        
+        // Show/Hide "X" button if you implemented it, otherwise skip
+        const clearBtn = document.getElementById('search-clear');
+        if(clearBtn) clearBtn.style.display = query.length > 0 ? 'block' : 'none';
+
+        if(query.length > 2) {
+            dropdown.classList.remove('hidden');
+            dropdown.innerHTML = '<div style="padding:15px;color:#888;text-align:center">Hunting...</div>';
+            searchTimeout = setTimeout(() => liveSearch(query), 300);
+        } else {
+            dropdown.classList.add('hidden');
+        }
     });
     
-    // Search Listener
-    document.getElementById('search-input').addEventListener('keypress', function (e) {
-        if (e.key === 'Enter') runSearch();
+    // 2. Enter Key -> Browse Mode
+    input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            dropdown.classList.add('hidden');
+            // If we are in Hero Mode, switch to Browse Mode
+            // If we are already in Browse Mode, just reload content
+            // For now, assuming we want to just run search:
+            runSearch();
+        }
     });
-
-    // Optional: live show clear button visibility on input
-    const searchInput = document.getElementById('search-input');
-    if (searchInput) {
-        searchInput.addEventListener('input', () => {
-            toggleSearchClear(!!searchInput.value.trim());
-        });
-    }
-
-    // Search clear (×) button
-    const searchClearBtn = document.getElementById('search-clear');
-    if (searchClearBtn) {
-        searchClearBtn.addEventListener('click', () => {
-            const input = document.getElementById('search-input');
-            if (input) input.value = '';
-            isSearchActive = false;
-            toggleSearchClear(false);
-            // restore normal rows
-            loadContent(currentTab);
-        });
-    }
     
-    loadContent(currentTab);
+    // 3. Close Dropdown on Click Outside
+    document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+            dropdown.classList.add('hidden');
+        }
+    });
 });
 
-// Toggle visibility of the clear button
-function toggleSearchClear(show) {
-    const btn = document.getElementById('search-clear');
-    if (!btn) return;
-    btn.style.display = show ? 'flex' : 'none';
+function clearSearch() {
+    const input = document.getElementById('search-input');
+    input.value = '';
+    document.getElementById('live-results').classList.add('hidden');
+    if(document.getElementById('search-clear')) document.getElementById('search-clear').style.display = 'none';
+}
+
+// --- SEARCH FUNCTIONS ---
+async function liveSearch(query) {
+    const dropdown = document.getElementById('live-results');
+    try {
+        const res = await fetch(`/search?query=${encodeURIComponent(query)}`);
+        const items = await res.json();
+        
+        dropdown.innerHTML = '';
+        
+        // Filter out bad data
+        const validItems = items.filter(i => (i.title || i.name) && i.poster_path);
+
+        if(validItems.length > 0) {
+            validItems.slice(0, 6).forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'live-item';
+                const title = item.title || item.name;
+                const year = (item.release_date || '').split('-')[0] || 'N/A';
+                const img = `https://image.tmdb.org/t/p/w92${item.poster_path}`;
+                
+                div.innerHTML = `
+                    <img src="${img}" class="live-poster">
+                    <div class="live-info">
+                        <span class="live-title">${title}</span>
+                        <span class="live-year">${year}</span>
+                    </div>
+                `;
+                div.onclick = () => {
+                    dropdown.classList.add('hidden');
+                    openModal(item);
+                };
+                dropdown.appendChild(div);
+            });
+        } else {
+            dropdown.innerHTML = '<div style="padding:15px;color:#888;text-align:center">No signals found.</div>';
+        }
+    } catch (e) {
+        console.error(e);
+    }
 }
 
 async function runSearch() {
     const query = document.getElementById('search-input').value;
     if (!query) return;
+
     const container = document.getElementById('content-area');
-    container.innerHTML = '<div style="padding:4vh 0; text-align:center">Hunting...</div>';
+    container.innerHTML = '<div style="padding:40px; text-align:center">Hunting...</div>';
+
     try {
         const res = await fetch(`/search?query=${encodeURIComponent(query)}`);
         const items = await res.json();
+        
         container.innerHTML = '';
-        isSearchActive = true;
-        toggleSearchClear(true);
-
+        
         if (items.length === 0) {
-            container.innerHTML = '<div style="padding:4vh 0; text-align:center">No signals found.</div>';
+            container.innerHTML = '<div style="padding:40px; text-align:center">No signals found.</div>';
             return;
         }
-        // Single row of results
+
         createRow(`Results for "${query}"`, items);
+        
     } catch (err) {
-        container.innerHTML = `<div style="padding:4vh 0;color:#f55">Error: ${err}</div>`;
+        container.innerHTML = `<div style="padding:40px;color:#f55">Search failed: ${err}</div>`;
     }
 }
 
-async function loadContent(type) {
+// --- CONTENT LOADING ---
+async function loadHome() {
     const container = document.getElementById('content-area');
-    container.innerHTML = '<div style="padding:4vh 0; text-align:center;">Loading catalog...</div>';
+    container.innerHTML = '<div style="padding:40px; text-align:center;">Initializing...</div>';
+    
     try {
-        const res = await fetch(`/${type}?limit=60`);
-        const items = await res.json();
+        // Fetch Top Movies & Shows
+        const [resMovies, resShows] = await Promise.all([
+            fetch(`/movies?limit=15`),
+            fetch(`/shows?limit=15`)
+        ]);
+        
+        const movies = await resMovies.json();
+        const shows = await resShows.json();
+        
         container.innerHTML = '';
-
-        // Only one row per tab, top 10 items
-        const topItems = items.slice(0, 10);
-        const rowTitle = type === 'movies' ? 'Top Movies' : 'Top Shows';
-        createRow(rowTitle, topItems);
+        
+        createRow('Popular Movies', movies);
+        createRow('Popular Series', shows);
+        
     } catch (err) {
-        container.innerHTML = `<div style="padding:4vh 0;color:#f55">Error: ${err}</div>`;
+        container.innerHTML = `<div style="padding:40px;color:#f55">Error: ${err}</div>`;
     }
 }
 
@@ -113,19 +159,24 @@ function createRow(title, items) {
         const card = document.createElement('div');
         card.className = 'card';
         card.onclick = () => openModal(item);
+        
+        const name = item.title || item.name;
         const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450';
-        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy">`;
+        
+        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
         scroller.appendChild(card);
     });
 
+    // Arrows
     const prevBtn = document.createElement('button');
     prevBtn.className = 'row-arrow prev';
     prevBtn.innerHTML = '&#8249;';
-    prevBtn.onclick = () => scroller.scrollBy({ left: -0.8 * scroller.clientWidth, behavior: 'smooth' });
+    prevBtn.onclick = () => scroller.scrollBy({ left: -1000, behavior: 'smooth' });
+    
     const nextBtn = document.createElement('button');
     nextBtn.className = 'row-arrow next';
     nextBtn.innerHTML = '&#8250;';
-    nextBtn.onclick = () => scroller.scrollBy({ left: 0.8 * scroller.clientWidth, behavior: 'smooth' });
+    nextBtn.onclick = () => scroller.scrollBy({ left: 1000, behavior: 'smooth' });
 
     section.appendChild(prevBtn);
     section.appendChild(nextBtn);
@@ -141,34 +192,53 @@ function openModal(item) {
     modalContent.style.display = 'grid'; 
     document.getElementById('player-wrapper').classList.add('hidden');
 
-    document.getElementById('m-title').textContent = item.title;
+    // ROBUST TYPE DETECTION
+    // TV Shows usually have 'name', Movies have 'title'.
+    // Fallback: Check 'first_air_date' (TV) vs 'release_date' (Movie)
+    let isMovie = true;
+    if (item.name || item.first_air_date || (item.media_type === 'tv')) {
+        isMovie = false;
+    }
+
+    const title = item.title || item.name;
+    const date = item.release_date || item.first_air_date || '';
+    const year = date.split('-')[0];
+
+    document.getElementById('m-title').textContent = title;
     document.getElementById('m-desc').textContent = item.overview || 'No description available.';
     document.getElementById('m-poster').src = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/360x540';
     
+    // Score Fix (Cap at 100%)
     let score = '';
     if (typeof item.popularity_score === 'number') {
-        let val = item.popularity_score > 1 ? item.popularity_score : item.popularity_score * 100;
+        let val = item.popularity_score;
+        // Normalize: If > 10, assume it's raw popularity, clip to 98-99% for "Hit" look
+        if (val > 100) val = 98; 
         score = `${Math.round(val)}% Match`;
     }
     document.getElementById('m-score').textContent = score;
-    document.getElementById('m-year').textContent = (item.release_date || '').split('-')[0];
+    document.getElementById('m-year').textContent = year;
 
-    // SAVE STATE
-    currentTmdbId = item.tmdb_id;
-    currentType = currentTab === 'shows' ? 'tv' : 'movie';
-    currentSeason = 1;
-    currentEpisode = 1;
-
+    // Set State
+    currentTmdbId = item.tmdb_id || item.id; // Fallback to ID if tmdb_id missing
+    currentType = isMovie ? 'movie' : 'tv';
+    
+    // UI Logic: Movie vs Show
     const playBtn = document.querySelector('#play-btn');
-    playBtn.onclick = () => playVideo(currentType, currentTmdbId);
-
     const epSection = document.getElementById('m-episodes');
-    if (currentTab === 'shows') {
-        epSection.classList.remove('hidden');
-        loadSeasons(item.id);
-    } else {
+
+    if (isMovie) {
+        // MOVIE: Show Play Button, Hide Episodes
+        playBtn.style.display = 'block';
+        playBtn.onclick = () => playVideo('movie', currentTmdbId);
         epSection.classList.add('hidden');
+    } else {
+        // TV SHOW: Hide Main Play Button (Force Episode Select), Show Episodes
+        playBtn.style.display = 'none'; 
+        epSection.classList.remove('hidden');
+        loadSeasons(currentTmdbId);
     }
+    
     modal.classList.add('active');
 }
 
@@ -183,31 +253,53 @@ function backdropClose(e) {
 
 async function loadSeasons(showId) {
     const list = document.getElementById('ep-list');
-    list.innerHTML = 'Loading...';
+    list.innerHTML = '<div style="padding:20px;text-align:center">Accessing Archives...</div>';
+    
     try {
+        // We need to fetch details because the search result might not have seasons attached
+        // We can hit your backend endpoint which fetches fresh details
+        // Assuming you have a route /shows/{id}/seasons
+        // OR we can hack it: If we don't have seasons in DB, we might need to trigger a fetch.
+        
+        // Better: Use the backend endpoint we made
         const res = await fetch(`/shows/${showId}/seasons`);
-        const data = await res.json();
+        if(!res.ok) throw new Error("No data");
+        
+        const seasons = await res.json();
         list.innerHTML = '';
-        const seasons = data.seasons || [];
+        
+        if (seasons.length === 0) {
+             list.innerHTML = '<div style="padding:20px;text-align:center">No episodes indexed. Try re-ingesting.</div>';
+             return;
+        }
         
         seasons.forEach(season => {
             const div = document.createElement('div');
-            div.innerHTML = `<div style="font-weight:bold; margin:15px 0 5px; color:#fff">Season ${season.season_number}</div>`;
+            div.innerHTML = `<div style="font-weight:bold; margin:20px 0 10px; color:#fff; border-bottom:1px solid #333; padding-bottom:5px;">Season ${season.season_number}</div>`;
+            
             (season.episodes || []).forEach(ep => {
                 const row = document.createElement('div');
                 row.className = 'ep-item';
-                row.innerHTML = `<span>${ep.episode_number}. ${ep.title}</span> <span>▶</span>`;
+                // Add click handler for specific episode
                 row.onclick = () => playVideo('tv', currentTmdbId, season.season_number, ep.episode_number);
+                
+                row.innerHTML = `
+                    <div style="display:flex; gap:15px; align-items:center; width:100%">
+                        <span style="color:var(--accent); font-weight:bold; width:30px">${ep.episode_number}</span>
+                        <span style="flex:1">${ep.title || 'Episode ' + ep.episode_number}</span>
+                        <span style="font-size:1.2rem">▶</span>
+                    </div>
+                `;
                 div.appendChild(row);
             });
             list.appendChild(div);
         });
     } catch (err) {
-        list.innerHTML = 'Error loading episodes';
+        console.error(err);
+        list.innerHTML = '<div style="padding:20px; color:#f55">Signal scrambled (No Seasons Found).</div>';
     }
 }
 
-// --- PLAYER LOGIC ---
 // --- PLAYER LOGIC ---
 async function playVideo(type, tmdbId, season=1, episode=1) {
     currentTmdbId = tmdbId;
@@ -219,37 +311,32 @@ async function playVideo(type, tmdbId, season=1, episode=1) {
     const originalText = btn.innerText;
     btn.innerText = "HUNTING...";
     
-    // Switch UI to Player Mode
     document.getElementById('modal-content-wrapper').style.display = 'none';
     document.getElementById('player-wrapper').classList.remove('hidden');
 
     // Default to Auto-Hunt
-    await loadSource('auto');
-    
+    loadSource('auto');
     btn.innerText = originalText;
 }
 
-function changeSource(provider) {
-    loadSource(provider);
-}
+function changeSource(provider) { loadSource(provider); }
 
 async function loadSource(provider) {
     const artContainer = document.getElementById('artplayer-app');
     const iframe = document.getElementById('embed-frame');
     const select = document.getElementById('source-select');
     
-    // 1. HARD RESET
+    // RESET
     artContainer.style.display = 'none';
     iframe.classList.add('hidden');
-    iframe.src = "about:blank"; // Clear previous video audio/state
+    iframe.src = "about:blank";
     if(art) art.pause();
 
-    // Show loading state in selector
+    // Loading state in dropdown
     const prevLabel = select.options[select.selectedIndex].text;
-    select.options[select.selectedIndex].text = "Hunting...";
+    select.options[select.selectedIndex].text = "Loading...";
 
     try {
-        // Pass 'auto' or specific provider name
         const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
         const res = await fetch(apiUrl);
         const data = await res.json();
@@ -258,18 +345,11 @@ async function loadSource(provider) {
         select.options[select.selectedIndex].text = prevLabel;
 
         if (data.type === 'embed') {
-            // --- EMBED MODE ---
-            console.log("Playing Embed:", data.source);
+            // EMBED MODE
             iframe.classList.remove('hidden');
             iframe.src = data.url;
-            
-            // Alert user what source won
-            if(provider === 'auto') {
-               // Update dropdown to show what we found? Optional.
-               console.log(`Auto-Hunt found: ${data.source}`);
-            }
         } else {
-            // --- DIRECT MODE ---
+            // DIRECT MODE
             artContainer.style.display = 'block';
             if (!art) initArtPlayer();
             
@@ -301,11 +381,8 @@ function initArtPlayer() {
         flip: true,
         playbackRate: true,
         aspectRatio: true,
-        
-        // FULLSCREEN FIX: Target the wrapper, not the window
         fullscreen: true,
         fullscreenWeb: true,
-        
         miniProgressBar: true,
         mutex: true,
         backdrop: true,
@@ -313,104 +390,23 @@ function initArtPlayer() {
         autoPlayback: true,
         airplay: true,
         theme: '#23ade5',
+        customType: {
+            m3u8: function (video, url) {
+                if (Hls.isSupported()) {
+                    const hls = new Hls();
+                    hls.loadSource(url);
+                    hls.attachMedia(video);
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = url;
+                }
+            }
+        }
     });
 }
 
 function closePlayer() {
     if (art) art.pause();
-    document.getElementById('embed-frame').src = "about:blank"; // Stop audio
+    document.getElementById('embed-frame').src = "about:blank";
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('modal-content-wrapper').style.display = 'grid';
 }
-
-// ... (Keep your existing init and loadContent logic) ...
-
-let searchTimeout;
-
-document.addEventListener('DOMContentLoaded', () => {
-    init(); // Load initial browse content hidden in background
-    
-    // Live Search Listener
-    const input = document.getElementById('search-input');
-    input.addEventListener('input', (e) => {
-        clearTimeout(searchTimeout);
-        if(e.target.value.length > 2) {
-            searchTimeout = setTimeout(() => liveSearch(e.target.value), 300);
-        } else {
-            document.getElementById('live-results').classList.add('hidden');
-        }
-    });
-    
-    // Enter key triggers full browse mode with search
-    input.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            enterBrowseMode(e.target.value);
-            document.getElementById('live-results').classList.add('hidden');
-        }
-    });
-});
-
-async function liveSearch(query) {
-    const dropdown = document.getElementById('live-results');
-    try {
-        const res = await fetch(`/search?query=${encodeURIComponent(query)}`);
-        const items = await res.json();
-        
-        dropdown.innerHTML = '';
-        if(items.length > 0) {
-            items.slice(0, 5).forEach(item => {
-                const div = document.createElement('div');
-                div.className = 'live-item';
-                const img = item.poster_path ? `https://image.tmdb.org/t/p/w92${item.poster_path}` : '';
-                const year = (item.release_date || '').split('-')[0];
-                
-                div.innerHTML = `
-                    <img src="${img}" class="live-poster">
-                    <div class="live-info">
-                        <div class="live-title">${item.title || item.name}</div>
-                        <div class="live-year">${year}</div>
-                    </div>
-                `;
-                div.onclick = () => {
-                    openModal(item); // Open details directly
-                    // Optionally switch to browse mode too
-                    // enterBrowseMode(); 
-                };
-                dropdown.appendChild(div);
-            });
-            dropdown.classList.remove('hidden');
-        } else {
-            dropdown.classList.add('hidden');
-        }
-    } catch (e) {
-        console.error(e);
-    }
-}
-
-function enterBrowseMode(searchQuery = null) {
-    document.getElementById('hero-section').style.opacity = '0';
-    setTimeout(() => {
-        document.getElementById('hero-section').style.display = 'none';
-        document.getElementById('browse-section').classList.remove('hidden');
-        
-        if(searchQuery) {
-            // If entered with a search term, clear existing rows and show results
-            const container = document.getElementById('content-area');
-            container.innerHTML = '';
-            // Re-run search in browse context
-            fetch(`/search?query=${encodeURIComponent(searchQuery)}`)
-                .then(r => r.json())
-                .then(items => createRow(`Results for "${searchQuery}"`, items));
-        }
-    }, 500);
-}
-
-function goHome() {
-    document.getElementById('browse-section').classList.add('hidden');
-    document.getElementById('hero-section').style.display = 'flex';
-    setTimeout(() => document.getElementById('hero-section').style.opacity = '1', 50);
-    document.getElementById('search-input').value = '';
-    document.getElementById('live-results').classList.add('hidden');
-}
-
-// ... (Keep your createRow, openModal, playVideo, loadSource functions) ...
