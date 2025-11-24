@@ -32,20 +32,25 @@
     <div id="modal" class="modal-overlay" onclick="backdropClose(event)">
         <div id="modal-glass" class="modal-glass">
             <div id="player-wrapper" class="hidden">
+                
                 <div class="player-controls">
-                    <select id="source-select" class="source-select" onchange="changeSource(this.value)">
-                            <option value="auto">⚡ Auto-Hunt (Best)</option>
-                            <option value="VidLink">VidLink (Fastest)</option>
+                    <div class="controls-left">
+                        <span style="color:#666; font-weight:bold; font-size:0.8rem;">SOURCE:</span>
+                        <select id="source-select" class="source-select" onchange="changeSource(this.value)">
+                            <option value="auto">⚡ Auto (VidLink)</option>
+                            <option value="VidLink">VidLink</option>
                             <option value="VidSrc.to">VidSrc.to</option>
                             <option value="VidSrc.net">VidSrc.net</option>
                             <option value="SuperEmbed">SuperEmbed</option>
-                            <option value="VidSrc.cc">VidSrc.cc (New)</option>
+                            <option value="VidSrc.cc">VidSrc.cc</option>
                             <option value="AutoEmbed">AutoEmbed</option>
                         </select>
-                    <button class="exit-btn" onclick="closePlayer()">X</button>
+                    </div>
+                    <button class="exit-btn" onclick="closePlayer()">✕ EXIT</button>
                 </div>
-                <div id="artplayer-app" style="width: 100%; height: 100%;"></div>
-                <iframe id="embed-frame" class="hidden" allowfullscreen></iframe>
+
+                <div id="artplayer-app"></div>
+                <iframe id="embed-frame" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
             </div>
 
             <div id="modal-content-wrapper">
@@ -70,3 +75,4 @@
     <script src="/static/script.js"></script>
 </body>
 </html>
+
