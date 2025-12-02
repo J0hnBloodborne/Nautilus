@@ -41,6 +41,7 @@ class TVShow(Base):
     popularity_score = Column(Float)
     
     seasons = relationship("Season", back_populates="show", cascade="all, delete-orphan")
+    ratings = relationship("Interaction", back_populates="tv_show")
 
 class Season(Base):
     __tablename__ = 'seasons'
@@ -51,7 +52,7 @@ class Season(Base):
     show_id = Column(Integer, ForeignKey('tv_shows.id'))
     season_number = Column(Integer)
     name = Column(String)
-    air_date = Column(String)  # Optional: season first air date
+    air_date = Column(String)
 
     show = relationship("TVShow", back_populates="seasons")
     episodes = relationship(
@@ -71,11 +72,10 @@ class Episode(Base):
     episode_number = Column(Integer)
     title = Column(String)
     overview = Column(Text)
-    runtime_minutes = Column(Integer)  # From TMDB episode runtime
+    runtime_minutes = Column(Integer)
     air_date = Column(String)
-    still_path = Column(String)  # Episode still image path
+    still_path = Column(String)
     
-    # File Management
     stream_url = Column(String)
     is_downloaded = Column(Boolean, default=False)
     file_path = Column(String)
@@ -96,42 +96,44 @@ class User(Base):
 
 class Interaction(Base):
     __tablename__ = 'interactions'
-    # Tracks 'likes', 'views', 'ratings' for RecSys
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'))
-    movie_id = Column(Integer, ForeignKey('movies.id'))
-    interaction_type = Column(String) # 'view', 'rating'
-    rating_value = Column(Float)      # 1-5
+    
+    # LINKS TO CONTENT
+    movie_id = Column(Integer, ForeignKey('movies.id'), nullable=True)
+    tv_show_id = Column(Integer, ForeignKey('tv_shows.id'), nullable=True)
+    
+    interaction_type = Column(String) 
+    rating_value = Column(Float)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     user = relationship("User", back_populates="interactions")
     movie = relationship("Movie", back_populates="ratings")
+    tv_show = relationship("TVShow", back_populates="ratings")
 
 # --- MLOPS & LOGGING ---
 class SystemLog(Base):
     __tablename__ = 'system_logs'
-    # For Time Series & Drift Detection
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
-    metric_name = Column(String) # e.g., 'api_latency', 'daily_active_users'
+    metric_name = Column(String) 
     metric_value = Column(Float)
 
 class MLModel(Base):
     __tablename__ = 'ml_models'
-    # Model Registry: Tracks versions and performance
     id = Column(Integer, primary_key=True)
-    name = Column(String)           # e.g., 'recommender_v1'
-    version = Column(String)        # e.g., '1.0.0'
-    model_type = Column(String)     # 'classification', 'regression', 'recommender'
-    file_path = Column(String)      # Path in MinIO (e.g., 'models/rec_v1.pkl')
-    metrics = Column(JSON)          # {'accuracy': 0.85, 'rmse': 1.2}
-    is_active = Column(Boolean, default=False) # Is this the one currently live?
+    name = Column(String)
+    version = Column(String)
+    model_type = Column(String)
+    file_path = Column(String)
+    metrics = Column(JSON)
+    is_active = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 def init_db():
     engine = create_engine(DATABASE_URL)
     Base.metadata.create_all(engine)
-    print("Database initialized.")
+    print("✅ DB Schema Synchronized.")
 
 if __name__ == "__main__":
     init_db()
