@@ -30,6 +30,10 @@ try:
     from cuml.ensemble import RandomForestRegressor
     from cuml.linear_model import LogisticRegression
     from cuml.ensemble import RandomForestClassifier 
+    w = cuml.RandomForestRegressor()
+    x = RandomForestRegressor()
+    y = LogisticRegression()
+    z = RandomForestClassifier()
     print("GPU MODULES: Pre-loaded successfully.")
 except ImportError:
     print("GPU MODULES: Not found (Running on CPU mode).")
@@ -37,10 +41,6 @@ except Exception as e:
     print(f"GPU MODULES: Pre-load error: {e}")
 
 # Dummy references to avoid linter errors
-w = cuml.RandomForestRegressor()
-x = RandomForestRegressor()
-y = LogisticRegression()
-z = RandomForestClassifier()
 
 def force_gpu_linkage():
     print("Hunting for NVRTC library...")
