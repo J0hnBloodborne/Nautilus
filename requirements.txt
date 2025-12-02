@@ -16,3 +16,4 @@ ruff
 prefect
 prefect-sqlalchemy
 tqdm
+python-multipart
