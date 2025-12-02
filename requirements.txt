@@ -8,6 +8,7 @@ passlib
 bcrypt
 faker
 pandas
+numpy
 scikit-learn
 joblib
 httpx
@@ -17,3 +18,7 @@ prefect
 prefect-sqlalchemy
 tqdm
 python-multipart
+mlxtend
+deepchecks
+matplotlib
+seaborn

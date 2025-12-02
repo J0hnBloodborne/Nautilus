@@ -37,8 +37,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install exact dependencies needed for the app
-        pip install fastapi uvicorn sqlalchemy psycopg2-binary requests python-dotenv passlib bcrypt faker pandas scikit-learn joblib httpx pytest ruff
+        pip install -r requirements.txt
 
     - name: Lint Code
       run: |
