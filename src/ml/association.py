@@ -4,10 +4,11 @@ from mlxtend.preprocessing import TransactionEncoder
 import joblib
 import os
 import sys
-from src.database import DATABASE_URL
-from src.models import MLModel
+from src.core.database import DATABASE_URL
+from src.core.models import MLModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from datetime import datetime
 
 # ABSOLUTE PATHS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,7 +85,12 @@ def run_association_rules():
                 if out_tmdb and out_tmdb not in lookup[tmdb_id]:
                     lookup[tmdb_id].append(out_tmdb)
                     rule_count += 1
-            
+
+    if os.path.exists(MODEL_PATH):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_path = f"{MODEL_PATH}_{timestamp}.bak"
+        os.rename(MODEL_PATH, archive_path)
+        print(f"Archived previous model to {archive_path}")        
     joblib.dump(lookup, MODEL_PATH)
     print(f"Saved {rule_count} translated rules to {MODEL_PATH}")
     

@@ -1,155 +1,131 @@
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_sample_weight
+import xgboost as xgb
 import os
 import sys
-import glob
-import ctypes
 import joblib
 import json
+from datetime import datetime
 
 # Path setup
 sys.path.append(os.getcwd())
-from src.database import DATABASE_URL
-from src.models import MLModel
-from sqlalchemy.orm import sessionmaker
-
-# --- GPU PRELOADER ---
-def force_gpu_linkage():
-    print("Hunting for NVRTC library...")
-    found = False
-    for p in sys.path:
-        pattern = os.path.join(p, "nvidia", "*", "lib", "libnvrtc.so.12")
-        matches = glob.glob(pattern)
-        if matches:
-            lib_path = matches[0]
-            lib_dir = os.path.dirname(lib_path)
-            current_ld = os.environ.get('LD_LIBRARY_PATH', '')
-            if lib_dir not in current_ld:
-                os.environ['LD_LIBRARY_PATH'] = f"{lib_dir}:{current_ld}"
-            try:
-                ctypes.CDLL(lib_path)
-                found = True
-                break
-            except Exception:
-                pass
-    if not found: 
-        print("GPU binding might fail.")
-
-force_gpu_linkage()
-
-# Hybrid Import (Random Forest is better for Multi-Class)
-try:
-    from cuml.ensemble import RandomForestClassifier
-    print("GPU ACCELERATION: ONLINE")
-    USING_GPU = True
-except ImportError:
-    from sklearn.ensemble import RandomForestClassifier
-    print("GPU NOT FOUND: USING CPU")
-    USING_GPU = False
+from src.core.database import DATABASE_URL
+from src.core.models import MLModel
 
 MODEL_PATH = "src/models/genre_classifier.pkl"
 os.makedirs("src/models", exist_ok=True)
 
+# GPU Check
+try:
+    import pynvml
+    pynvml.nvmlInit()
+    print("⚡ GPU DETECTED: Enabling XGBoost CUDA acceleration.")
+    DEVICE = "cuda"
+except Exception:
+    print("GPU NOT FOUND: Using CPU.")
+    DEVICE = "cpu"
+
 def run_classification():
-    print("Fetching data...")
+    print("Fetching data (Movies + TV)...")
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
     session = Session()
 
     try:
-        # Fetch movies with overview and genres
-        df = pd.read_sql("SELECT title, overview, genres FROM movies", engine)
-        print(f"Total rows fetched: {len(df)}")
-        
-        # DEBUG: Print the first raw genre entry to see format
-        if not df.empty:
-            print(f"Sample raw genre data: {df.iloc[0]['genres']} (Type: {type(df.iloc[0]['genres'])})")
-
+        # Union Movies and TV for maximum data
+        df_movies = pd.read_sql("SELECT overview, genres FROM movies", engine)
+        df_shows = pd.read_sql("SELECT overview, genres FROM tv_shows", engine)
+        df = pd.concat([df_movies, df_shows], ignore_index=True)
         df = df.dropna(subset=['overview', 'genres'])
+
+        # Basic cleaning: strip and drop very short overviews (likely junk)
+        df['overview'] = (
+            df['overview']
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        df = df[df['overview'].str.len() > 20]
         
-        # Improved Extraction Logic
+        # Extract Primary Genre ID
         def get_primary_genre(g_data):
             try:
-                # Case 1: It's already a list (SQLAlchemy JSON handling)
                 if isinstance(g_data, list):
-                    return int(g_data[0]) if len(g_data) > 0 else None
-                
-                # Case 2: It's a string (e.g. "[28, 12]")
+                    return int(g_data[0])
                 if isinstance(g_data, str):
                     parsed = json.loads(g_data)
                     if isinstance(parsed, list) and len(parsed) > 0:
                         return int(parsed[0])
-                        
-                # Case 3: It's a single integer
                 if isinstance(g_data, (int, float)):
                     return int(g_data)
-                    
             except Exception:
-                return None
+                pass
             return None
 
         df['target'] = df['genres'].apply(get_primary_genre)
-        
-        # DEBUG: Check how many survived
-        df_clean = df.dropna(subset=['target'])
-        print(f"Rows after genre extraction: {len(df_clean)}")
-        
-        if len(df_clean) < 10:
-            print("CRITICAL: Not enough labeled data. Check ingest.py.")
-            # Emergency Fallback: Train on dummy data just to save a model (Prevents API crash)
-            print("Generating dummy data to ensure model file exists...")
-            df_clean = df.copy()
-            df_clean['target'] = np.random.randint(0, 2, size=len(df_clean))
-            # Continue with this data just to generate the .pkl
+        df = df.dropna(subset=['target'])
 
-        df = df_clean
+        # Filter for selected genres only (to make it easier for the model)
+        # 28=Action, 12=Adventure, 16=Animation, 35=Comedy, 18=Drama, 878=Sci-Fi, 27=Horror
+        TARGET_GENRES = [28, 12, 16, 35, 18, 878, 27]
+        df = df[df['target'].isin(TARGET_GENRES)]
 
-        # Filter rare genres (min 5 samples)
-        counts = df['target'].value_counts()
-        valid_genres = counts[counts >= 5].index
-        df = df[df['target'].isin(valid_genres)]
+        # Explicit mapping: genre ID -> class index 0..N-1
+        genre_to_idx = {g: i for i, g in enumerate(TARGET_GENRES)}
+        idx_to_genre = {i: g for g, i in genre_to_idx.items()}
+        df['class_idx'] = df['target'].map(genre_to_idx)
 
-        print(f"Training on {len(df)} samples across {len(valid_genres)} genres.")
+        print("Class distribution (normalized):")
+        print(df['class_idx'].value_counts(normalize=True))
+        print(f"Training on {len(df)} samples across {len(TARGET_GENRES)} genres.")
 
-        # Vectorize
-        tfidf = TfidfVectorizer(max_features=2000, stop_words='english')
+        # Vectorize (TF-IDF) - stronger text features
+        tfidf = TfidfVectorizer(max_features=50000, stop_words='english', ngram_range=(1, 2))
         X_vec = tfidf.fit_transform(df['overview'])
-        
-        # Convert to Float32 for GPU
-        X = X_vec.toarray().astype(np.float32)
-        y = df['target'].astype(np.int32).values
-        
-        # Encode labels
-        le = LabelEncoder()
-        y = le.fit_transform(y)
+        y = df['class_idx'].astype(int).values
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        print("Training Random Forest Classifier...")
-        model = RandomForestClassifier(n_estimators=100, max_depth=16, random_state=42)
-        model.fit(X_train, y_train)
-        
+        # Encode Labels (0..num_class-1) for compatibility
+        le = LabelEncoder()
+        y_encoded = le.fit_transform(y)
+
+        # Split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_vec, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
+        )
+
+        # Handle Imbalance
+        sample_weights = compute_sample_weight(
+            class_weight='balanced',
+            y=y_train
+        )
+
+        print(f"Training XGBoost ({DEVICE})...")
+        model = xgb.XGBClassifier(
+            n_estimators=1200,       # was 800
+            max_depth=7,            # was 8
+            learning_rate=0.03,     # slower learning
+            objective='multi:softmax',
+            num_class=len(TARGET_GENRES),
+            tree_method="hist",
+            device=DEVICE,
+            eval_metric='mlogloss',
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=2.0,         # more L2
+            reg_alpha=0.5,          # some L1
+        )
+
+        model.fit(X_train, y_train, sample_weight=sample_weights)
+
         preds = model.predict(X_test)
-        
-        # GPU output handling
-        if USING_GPU:
-            try:
-                preds = preds.to_numpy()
-            except Exception:
-                pass
-            try:
-                y_test = y_test.get() 
-            except Exception:
-                pass
-            try:
-                y_test = y_test.to_numpy()
-            except Exception:
-                pass
+        print(classification_report(y_test, preds))
 
         # Metrics
         metrics = {
@@ -159,17 +135,55 @@ def run_classification():
             "f1": float(f1_score(y_test, preds, average='weighted', zero_division=0))
         }
         print(f"Metrics: {metrics}")
-        
-        # Save Model + Vectorizer + LabelEncoder
-        joblib.dump({'model': model, 'vectorizer': tfidf, 'encoder': le}, MODEL_PATH)
+
+        # Simple overfit check
+        train_preds = model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_preds)
+        print(f"Train accuracy: {train_acc}")
+
+        # Logistic Regression baseline for comparison
+        try:
+            from sklearn.linear_model import LogisticRegression
+            logreg = LogisticRegression(
+                max_iter=2000,
+                n_jobs=-1,
+                class_weight='balanced',
+                C=2.0,
+                multi_class='multinomial'
+            )
+            logreg.fit(X_train, y_train)
+            lr_preds = logreg.predict(X_test)
+            lr_acc = accuracy_score(y_test, lr_preds)
+            print(f"LogReg accuracy: {lr_acc}")
+        except Exception as e:
+            print(f"LogReg baseline failed: {e}")
+
+        # Archive & Save
+        if os.path.exists(MODEL_PATH):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.rename(MODEL_PATH, f"{MODEL_PATH}_{timestamp}.bak")
+            print(f"Archived previous model to {MODEL_PATH}_{timestamp}.bak")
+
+        # Save model and supporting artifacts
+        joblib.dump(
+            {
+                'model': model,
+                'vectorizer': tfidf,
+                'encoder': le,
+                'genre_to_idx': genre_to_idx,
+                'idx_to_genre': idx_to_genre,
+                'target_genres': TARGET_GENRES,
+            },
+            MODEL_PATH
+        )
         print(f"Model saved to {MODEL_PATH}")
 
         # Register to DB
         try:
             session.query(MLModel).filter(MLModel.model_type == "classification").update({MLModel.is_active: False})
             entry = MLModel(
-                name="Genre_RFC_MultiClass",
-                version="2.0.0",
+                name="Genre_XGBoost_Top5",
+                version="3.0.0",
                 model_type="classification",
                 file_path=MODEL_PATH,
                 metrics=metrics,
@@ -180,10 +194,10 @@ def run_classification():
             print("Model registered.")
         except Exception as e:
             session.rollback()
-            print(e)
+            print(f"DB Error: {e}")
             
     except Exception as e:
-        print(f"Failed: {e}")
+        print(f"Classification Failed: {e}")
     finally:
         session.close()
 

@@ -9,9 +9,10 @@ import os
 import sys
 import glob
 import ctypes
+from datetime import datetime
 from dotenv import load_dotenv
-from src.models import MLModel
-from src.database import DATABASE_URL 
+from src.core.models import MLModel
+from src.core.database import DATABASE_URL 
 
 def force_gpu_linkage():
     print("Hunting for NVRTC library...")
@@ -111,6 +112,11 @@ def train_svd(df):
         "user_ids": matrix.index,
         "matrix_reduced": matrix_reduced
     }
+    if os.path.exists(MODEL_PATH):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_path = f"{MODEL_PATH}_{timestamp}.bak"
+        os.rename(MODEL_PATH, archive_path)
+        print(f"Archived previous model to {archive_path}")  
     joblib.dump(artifact, MODEL_PATH)
     print(f"Saved to {MODEL_PATH}")
     

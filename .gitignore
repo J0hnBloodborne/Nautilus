@@ -15,3 +15,17 @@ backup_pre_migration.sql
 /src/static/index_old.html
 /data/raw/
 /src/repair_genres.py
+
+# Model artifacts
+*.pkl
+src/models/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor cruft
+.DS_Store
+
+# Data (real/raw)
+data/raw/
+data/processed/

@@ -8,8 +8,9 @@ import joblib
 import sys
 import glob
 import ctypes
-from src.database import DATABASE_URL
-from src.models import MLModel
+from datetime import datetime
+from src.core.database import DATABASE_URL
+from src.core.models import MLModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -106,6 +107,11 @@ def run_regression():
         print(f"Metrics: {metrics}")
         
         # Save Model
+        if os.path.exists(MODEL_PATH):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_path = f"{MODEL_PATH}_{timestamp}.bak"
+            os.rename(MODEL_PATH, archive_path)
+            print(f"Archived previous model to {archive_path}")  
         joblib.dump(model, MODEL_PATH)
         
         # Register to DB

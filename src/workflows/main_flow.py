@@ -6,8 +6,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Import your existing logic
-from src.ingest_movies import fetch_movies
-from src.ingest_shows import fetch_shows
+from src.services.ingestion.ingest_movies import fetch_movies
+from src.services.ingestion.ingest_shows import fetch_shows
 from src.ml.train_model import fetch_data, train_svd, register_model
 
 # --- TASKS ---
