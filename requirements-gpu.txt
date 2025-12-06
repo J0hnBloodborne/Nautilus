@@ -1,26 +1,68 @@
 --extra-index-url https://pypi.nvidia.com
 
-# RAPIDS / cuDF / cuML / friends
-cudf-cu12==25.10.0
-cugraph-cu12==25.10.1
-cuml-cu12==25.10.0
-dask-cudf-cu12==25.10.0
-dask-cuda==25.10.0
-distributed-ucxx-cu12==0.46.0
-pylibcudf-cu12==25.10.0
-pylibcugraph-cu12==25.10.1
-pylibraft-cu12==25.10.0
-rmm-cu12==25.10.0
-raft-dask-cu12==25.10.0
-rapids-dask-dependency==25.10.0
+# --- Core app & ML deps (same as requirements.txt, unpinned) ---
+fastapi
+uvicorn
+starlette
+Jinja2
+jinja2-humanize-extension
 
-# Low-level CUDA bindings (if you really need them)
-cuda-python==12.9.4
-cuda-bindings==12.9.4
-cuda-core==0.3.2
-cuda-pathfinder==1.3.2
-cuda-toolkit==12.9.1
+SQLAlchemy
+psycopg2-binary
+alembic
 
-# NVidia libs that aren't auto-pulled (optional)
-nvidia-ml-py==13.580.82
-nvtx==0.2.14
+python-dotenv
+pydantic
+pydantic-settings
+pydantic-extra-types
+pydantic_core
+passlib
+
+numpy
+pandas
+scikit-learn
+scipy
+xgboost
+tensorflow[and-cuda]
+joblib
+matplotlib
+seaborn
+
+requests
+httpx
+anyio
+idna
+certifi
+charset-normalizer
+urllib3
+
+rich
+python-json-logger
+
+pytest
+ruff
+
+# --- RAPIDS / cuDF / cuML / friends ---
+cudf-cu12
+cugraph-cu12
+cuml-cu12
+dask-cudf-cu12
+dask-cuda
+distributed-ucxx-cu12
+pylibcudf-cu12
+pylibcugraph-cu12
+pylibraft-cu12
+rmm-cu12
+raft-dask-cu12
+rapids-dask-dependency
+
+# --- Low-level CUDA bindings (optional) ---
+cuda-python
+cuda-bindings
+cuda-core
+cuda-pathfinder
+cuda-toolkit
+
+# --- NVidia extras (optional) ---
+nvidia-ml-py
+nvtx
