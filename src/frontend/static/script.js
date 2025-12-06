@@ -79,7 +79,12 @@ async function liveSearch(query) {
                 `;
                 div.onclick = () => {
                     dropdown.classList.add('hidden');
-                    openModal(item);
+                    // Preserve media type so TV results open with episodes instead of PLAY
+                    let type = item.media_type;
+                    if (!type) {
+                        type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+                    }
+                    openModal(item, type);
                 };
                 dropdown.appendChild(div);
             });
@@ -102,7 +107,36 @@ async function runSearch() {
             container.innerHTML = '<div style="padding:40px; text-align:center">No signals found.</div>';
             return;
         }
-        createRow(`Results for "${query}"`, items);
+        // Use a temporary row-like rendering that preserves per-item media type
+        const title = `Results for "${query}"`;
+        const section = document.createElement('section');
+        section.className = 'row-wrapper';
+        section.innerHTML = `<div class="row-title">${title}</div>`;
+        const scroller = document.createElement('div');
+        scroller.className = 'row-scroller';
+
+        items.forEach(item => {
+            const card = document.createElement('div');
+            card.className = 'card';
+
+            let type = item.media_type;
+            if (!type) {
+                type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+            }
+
+            card.onclick = () => openModal(item, type);
+
+            const name = item.title || item.name;
+            const imgSrc = item.poster_path
+                ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+                : 'https://via.placeholder.com/300x450';
+
+            card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
+            scroller.appendChild(card);
+        });
+
+        section.appendChild(scroller);
+        container.appendChild(section);
     } catch (err) {
         container.innerHTML = `<div style="padding:40px;color:#f55">Error: ${err}</div>`;
     }
@@ -130,7 +164,7 @@ async function loadHome() {
         container.innerHTML = '';
         
         // 1. RecSys Row
-        if(recs.length > 0) createRow('⚡ Picked for You (AI RecSys)', recs, 'movie');
+        if(recs.length > 0) createRow('Picked for You (AI RecSys)', recs, 'movie');
         
         // 2. Standard Rows
         createRow('Popular Movies', movies, 'movie');
@@ -266,9 +300,62 @@ function openModal(item, typeOverride=null) {
                 if (d && d.label) addBadge(`Forecast: ${d.label}`);
             })
             .catch(err => console.error('Revenue prediction failed', err));
-        // 3. Related (Association)
-        // (Optional: Add fetching related movies here if desired)
     }
+
+    // Related (Association + fallback) for both movies and TV
+    const tmdbIdForRelated = item.tmdb_id || item.id;
+    fetch(`/related/${tmdbIdForRelated}`)
+        .then(r => r.json())
+        .then(list => {
+            try {
+                const relatedContainerId = 'related-strip';
+                let existing = document.getElementById(relatedContainerId);
+                if (existing) existing.remove();
+
+                if (!Array.isArray(list) || list.length === 0) return;
+
+                const panel = document.createElement('div');
+                panel.id = relatedContainerId;
+                // More breathing room under the main info
+                panel.style.marginTop = '40px';
+
+                const heading = document.createElement('div');
+                heading.textContent = 'More like this';
+                heading.style.cssText = 'font-weight:600;margin-bottom:14px;color:#fff;font-size:0.95rem;';
+                panel.appendChild(heading);
+
+                const row = document.createElement('div');
+                // No horizontal scroll: a simple inline row of up to 5 cards
+                row.style.cssText = 'display:flex;gap:14px;flex-wrap:nowrap;';
+
+                list.slice(0, 5).forEach(rel => {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'width:90px;cursor:pointer;flex-shrink:0;';
+
+                    const rType = rel.first_air_date || rel.name ? 'tv' : 'movie';
+                    card.onclick = () => openModal(rel, rType);
+
+                    const rName = rel.title || rel.name;
+                    const rImg = rel.poster_path
+                        ? `https://image.tmdb.org/t/p/w185${rel.poster_path}`
+                        : 'https://via.placeholder.com/180x270';
+
+                    card.innerHTML = `
+                        <img src="${rImg}" style="width:100%;border-radius:6px;display:block;" loading="lazy" alt="${rName}">
+                        <div style="margin-top:6px;font-size:0.75rem;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${rName}</div>
+                    `;
+                    row.appendChild(card);
+                });
+
+                panel.appendChild(row);
+                // Append to main modal text column
+                const descBlock = document.querySelector('#m-desc').parentElement;
+                if (descBlock) descBlock.appendChild(panel);
+            } catch (err) {
+                console.error('Error rendering related strip', err);
+            }
+        })
+        .catch(err => console.error('Related fetch failed', err));
 
     // State & Buttons
     currentTmdbId = item.tmdb_id || item.id;

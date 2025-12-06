@@ -3,18 +3,15 @@ uvicorn
 starlette
 Jinja2
 jinja2-humanize-extension
-
 SQLAlchemy
 psycopg2-binary
 alembic
-
 python-dotenv
 pydantic
 pydantic-settings
 pydantic-extra-types
 pydantic_core
 passlib
-
 numpy
 pandas
 scikit-learn
@@ -24,7 +21,6 @@ tensorflow
 joblib
 matplotlib
 seaborn
-
 requests
 httpx
 anyio
@@ -32,9 +28,8 @@ idna
 certifi
 charset-normalizer
 urllib3
-
 rich
 python-json-logger
-
 pytest
 ruff
+python-multipart
