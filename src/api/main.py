@@ -158,50 +158,110 @@ def get_revenue_prediction(tmdb_id: int, db: Session = Depends(get_db)):
 
 @app.get("/predict/genre/{tmdb_id}")
 def get_genre_prediction(tmdb_id: int, db: Session = Depends(get_db)):
-    """
-    Predicts genre from plot. Handles both Movies and TV.
+    """Predict genres from plot using the multi-label FFNN model.
+
+    Returns multiple genres with scores plus a primary genre for legacy UI.
     """
     item, type_ = get_media_item(db, tmdb_id)
-    
-    if not item or not item.overview:
-        return {"genre": "Unknown (No Data)"}
 
-    model_path = "src/models/genre_classifier.pkl"
-    if not os.path.exists(model_path):
-        return {"genre": "Unknown (No Model)"}
+    if not item or not item.overview:
+        return {"genres": [], "primary": None}
+
+    model_path = "src/models/genre_multilabel_ffnn.keras"
+    artifacts_path = "src/models/genre_multilabel_ffnn_artifacts.pkl"
+    if not os.path.exists(model_path) or not os.path.exists(artifacts_path):
+        # Fallback: old behavior using single-label classifier
+        legacy_path = "src/models/genre_classifier.pkl"
+        if not os.path.exists(legacy_path):
+            return {"genres": [], "primary": None}
+        try:
+            artifact = joblib.load(legacy_path)
+            model = artifact['model']
+            vectorizer = artifact['vectorizer']
+            idx_to_genre = artifact.get('idx_to_genre')
+
+            vec = vectorizer.transform([item.overview])
+            if 'cuml' in str(type(model)):
+                vec = vec.toarray().astype(np.float32)
+
+            pred = model.predict(vec)
+            if hasattr(pred, 'get'):
+                pred = pred.get()
+            class_idx = int(pred[0])
+
+            if idx_to_genre is not None:
+                genre_id = int(idx_to_genre.get(class_idx, -1))
+            else:
+                le = artifact['encoder']
+                genre_id = int(le.inverse_transform([class_idx])[0])
+
+            name = TMDB_GENRE_MAP.get(genre_id, "Unknown")
+            primary = {"id": genre_id, "name": name, "score": 1.0}
+            return {"genres": [primary], "primary": primary}
+        except Exception as e:
+            print(f"Legacy Genre Error: {e}")
+            return {"genres": [], "primary": None}
 
     try:
-        artifact = joblib.load(model_path)
-        model = artifact['model']
-        vectorizer = artifact['vectorizer']
-        idx_to_genre = artifact.get('idx_to_genre')  # NEW
+        from tensorflow import keras as _keras
 
-        # Vectorize
-        vec = vectorizer.transform([item.overview])
+        artifact = joblib.load(artifacts_path)
+        vectorizer = artifact["vectorizer"]
+        svd = artifact["svd"]
+        idx_to_genre = artifact["idx_to_genre"]
 
-        # Handle GPU (Convert sparse matrix to dense float32)
-        if 'cuml' in str(type(model)):
-            vec = vec.toarray().astype(np.float32)
+        # Lazy-load and cache model in process-global variable
+        global _MULTI_LABEL_MODEL
+        try:
+            _MULTI_LABEL_MODEL
+        except NameError:
+            _MULTI_LABEL_MODEL = None
 
-        # Predict class index (0..N-1)
-        pred = model.predict(vec)
-        if hasattr(pred, 'get'):
-            pred = pred.get()
-        class_idx = int(pred[0])
+        if _MULTI_LABEL_MODEL is None:
+            _MULTI_LABEL_MODEL = _keras.models.load_model(model_path)
 
-        # Map class index -> TMDB genre ID
-        if idx_to_genre is not None:
-            genre_id = int(idx_to_genre.get(class_idx, -1))
-        else:
-            # Fallback: old behavior using encoder (shouldn't really happen now)
-            le = artifact['encoder']
-            genre_id = int(le.inverse_transform([class_idx])[0])
+        # Use title + overview for richer signal
+        title = item.title or ""
+        overview = item.overview or ""
+        text = f"{title} {overview}".strip()
 
-        genre_name = TMDB_GENRE_MAP.get(genre_id, "Unknown")
-        return {"genre": genre_name}
+        vec = vectorizer.transform([text])
+        X = svd.transform(vec).astype("float32")
+
+        proba = _MULTI_LABEL_MODEL.predict(X, verbose=0)[0]
+
+        threshold = 0.5
+        genres = []
+        for idx, score in enumerate(proba):
+            if score < threshold:
+                continue
+            tmdb_genre_id = int(idx_to_genre.get(idx, -1))
+            name = TMDB_GENRE_MAP.get(tmdb_genre_id)
+            if not name:
+                continue
+            genres.append({
+                "id": tmdb_genre_id,
+                "name": name,
+                "score": float(score),
+            })
+
+        genres.sort(key=lambda g: g["score"], reverse=True)
+
+        if not genres:
+            best_idx = int(proba.argmax())
+            tmdb_genre_id = int(idx_to_genre.get(best_idx, -1))
+            name = TMDB_GENRE_MAP.get(tmdb_genre_id, "Unknown")
+            genres = [{
+                "id": tmdb_genre_id,
+                "name": name,
+                "score": float(proba[best_idx]),
+            }]
+
+        primary = genres[0] if genres else None
+        return {"genres": genres, "primary": primary}
     except Exception as e:
-        print(f"Genre Error: {e}")
-        return {"genre": "Unknown"}
+        print(f"Multi-label Genre Error: {e}")
+        return {"genres": [], "primary": None}
     
 @app.get("/related/{tmdb_id}")
 def get_related_movies(tmdb_id: int, db: Session = Depends(get_db)):

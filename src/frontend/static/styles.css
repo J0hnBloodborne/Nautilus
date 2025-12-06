@@ -115,6 +115,55 @@ main { padding: 0 4vw 10vh; }
 .m-poster { width: 100%; height: 100%; object-fit: cover; opacity: 0.9; }
 .m-info { padding: 4vh 3vw; overflow-y: auto; }
 
+/* Action buttons in modal */
+.actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 24px;
+}
+
+.action-btn {
+    border-radius: 999px;
+    padding: 10px 22px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: 0.04em;
+    transition: transform 0.1s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.action-btn.primary {
+    background: var(--accent);
+    color: #050d1d;
+    box-shadow: 0 10px 25px rgba(12, 170, 220, 0.45);
+}
+
+.action-btn.secondary {
+    background: transparent;
+    color: #ddd;
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.action-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.65);
+}
+
+.action-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.7);
+}
+
+#play-btn {
+    min-width: 130px;
+}
+
 /* --- PLAYER OVERLAY (Polished) --- */
 #player-wrapper {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;

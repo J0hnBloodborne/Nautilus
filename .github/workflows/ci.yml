@@ -51,7 +51,7 @@ jobs:
         TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }} 
       run: |
         # 1. Initialize the Database (Create Tables)
-        python -m src.models
+        python -m src.core.models
         
         # 2. NOW run the tests
         python -m pytest

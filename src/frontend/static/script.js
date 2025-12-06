@@ -236,14 +236,36 @@ function openModal(item, typeOverride=null) {
     document.querySelectorAll('.ai-badge').forEach(e => e.remove());
     
     if (isMovie) {
-        // 1. Genre
-        fetch(`/predict/genre/${item.tmdb_id || item.id}`).then(r=>r.json()).then(d => {
-            if(d.genre) addBadge(`AI Genre: ${d.genre}`);
-        });
+        const tmdbId = item.tmdb_id || item.id;
+        // 1. Genre (multi-label aware, comma-separated)
+        fetch(`/predict/genre/${tmdbId}`)
+            .then(r => r.json())
+            .then(d => {
+                try {
+                    if (d && Array.isArray(d.genres) && d.genres.length > 0) {
+                        const sorted = [...d.genres].sort((a, b) => (b.score || 0) - (a.score || 0));
+                        const names = sorted.map(g => g.name).filter(Boolean);
+                        if (names.length > 0) {
+                            const text = `AI Genres: ${names.join(', ')}`;
+                            addBadge(text);
+                        }
+                    } else if (d && d.genre) {
+                        // Legacy single-genre response
+                        addBadge(`AI Genre: ${d.genre}`);
+                    }
+                } catch (err) {
+                    console.error('Error rendering genre badges', err);
+                }
+            })
+            .catch(err => console.error('Genre prediction failed', err));
+
         // 2. Revenue
-        fetch(`/movie/${item.tmdb_id || item.id}/prediction`).then(r=>r.json()).then(d => {
-            if(d.label) addBadge(`Forecast: ${d.label}`);
-        });
+        fetch(`/movie/${tmdbId}/prediction`)
+            .then(r => r.json())
+            .then(d => {
+                if (d && d.label) addBadge(`Forecast: ${d.label}`);
+            })
+            .catch(err => console.error('Revenue prediction failed', err));
         // 3. Related (Association)
         // (Optional: Add fetching related movies here if desired)
     }
@@ -255,16 +277,19 @@ function openModal(item, typeOverride=null) {
     currentEpisode = 1;
     
     const playBtn = document.querySelector('#play-btn');
-    playBtn.onclick = () => playVideo(currentType, currentTmdbId);
+    if (playBtn) {
+        playBtn.style.display = isMovie ? 'block' : 'none';
+        playBtn.onclick = () => playVideo(currentType, currentTmdbId);
+        playBtn.innerText = '▶ PLAY';
+    }
 
     const epSection = document.getElementById('m-episodes');
     if (isMovie) {
-        playBtn.style.display = 'block';
         epSection.classList.add('hidden');
     } else {
-        playBtn.style.display = 'none'; // Shows play via episodes
         epSection.classList.remove('hidden');
-        loadSeasons(item.id); 
+        // For TV, show seasons/episodes list and hook clicks into playVideo
+        loadSeasons(item.id);
     }
     
     modal.classList.add('active');
