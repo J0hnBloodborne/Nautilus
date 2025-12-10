@@ -33,3 +33,4 @@ python-json-logger
 pytest
 ruff
 python-multipart
+playwright

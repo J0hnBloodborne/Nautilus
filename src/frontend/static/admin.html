@@ -68,11 +68,22 @@
     </div>
 
     <h2>Model Registry (Experimentation Log)</h2>
-    <p>Performance metrics for currently deployed machine learning models.</p>
+    <p>Performance metrics for currently deployed machine learning models. Select two models of the same type to compare.</p>
     
+    <div style="margin-bottom: 20px;">
+        <button id="compare-btn" class="btn-link" style="margin-top:0; font-size:0.9rem;">Compare Selected</button>
+        <span id="compare-error" style="color:#ff3333; margin-left:15px; font-size:0.9rem;"></span>
+    </div>
+
+    <div id="comparison-container" class="chart-box hidden" style="margin-bottom: 40px; display:none;">
+        <h3 style="color:#aaa; margin-bottom:15px;">Model Comparison</h3>
+        <canvas id="comparison-chart"></canvas>
+    </div>
+
     <table id="model-table">
         <thead>
             <tr>
+                <th style="width: 40px;">Select</th>
                 <th>Model Name</th>
                 <th>Type</th>
                 <th>Metrics</th>
@@ -130,6 +141,7 @@
 
                     const row = `
                         <tr>
+                            <td><input type="checkbox" class="model-select" data-model='${JSON.stringify(m)}'></td>
                             <td style="font-weight:bold; color:#fff;">${m.name} <span style="font-weight:normal; color:#666; font-size:0.8em;">(v${m.version})</span></td>
                             <td>${m.model_type}</td>
                             <td style="font-family:monospace; font-size:0.9em; color:#ccc;">${metricStr}</td>
@@ -139,6 +151,99 @@
                     `;
                     tbody.innerHTML += row;
                 });
+
+                // Comparison Logic
+                let comparisonChart = null;
+                document.getElementById('compare-btn').onclick = () => {
+                    const checkboxes = document.querySelectorAll('.model-select:checked');
+                    const errorSpan = document.getElementById('compare-error');
+                    const container = document.getElementById('comparison-container');
+                    
+                    if (checkboxes.length !== 2) {
+                        errorSpan.textContent = "Please select exactly 2 models.";
+                        container.style.display = 'none';
+                        return;
+                    }
+
+                    const m1 = JSON.parse(checkboxes[0].dataset.model);
+                    const m2 = JSON.parse(checkboxes[1].dataset.model);
+
+                    if (m1.model_type !== m2.model_type) {
+                        errorSpan.textContent = `Cannot compare ${m1.model_type} with ${m2.model_type}.`;
+                        container.style.display = 'none';
+                        return;
+                    }
+
+                    errorSpan.textContent = "";
+                    container.style.display = 'block';
+
+                    // Prepare Data
+                    const labels = [];
+                    const data1 = [];
+                    const data2 = [];
+
+                    // Find common metrics
+                    const metrics1 = m1.metrics || {};
+                    const metrics2 = m2.metrics || {};
+                    const commonKeys = Object.keys(metrics1).filter(k => k in metrics2 && typeof metrics1[k] === 'number');
+
+                    if (commonKeys.length === 0) {
+                        errorSpan.textContent = "No common numeric metrics found.";
+                        container.style.display = 'none';
+                        return;
+                    }
+
+                    commonKeys.forEach(key => {
+                        labels.push(key.toUpperCase());
+                        data1.push(metrics1[key]);
+                        data2.push(metrics2[key]);
+                    });
+
+                    // Render Chart
+                    const ctx = document.getElementById('comparison-chart').getContext('2d');
+                    if (comparisonChart) comparisonChart.destroy();
+
+                    comparisonChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    label: `${m1.name} (v${m1.version})`,
+                                    data: data1,
+                                    backgroundColor: 'rgba(12, 170, 220, 0.6)',
+                                    borderColor: '#0CAADC',
+                                    borderWidth: 1
+                                },
+                                {
+                                    label: `${m2.name} (v${m2.version})`,
+                                    data: data2,
+                                    backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                                    borderColor: '#ff6384',
+                                    borderWidth: 1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    grid: { color: 'rgba(255,255,255,0.1)' },
+                                    ticks: { color: '#aaa' }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    ticks: { color: '#aaa' }
+                                }
+                            },
+                            plugins: {
+                                legend: { labels: { color: '#fff' } }
+                            }
+                        }
+                    });
+                };
             } catch (err) {
                 console.error("Failed to load stats", err);
             }

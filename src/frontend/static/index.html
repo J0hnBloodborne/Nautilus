@@ -36,7 +36,10 @@
                     <div class="controls-left">
                         <span style="color:rgba(255,255,255,0.6); font-weight:bold; font-size:0.8rem;">SOURCE:</span>
                         <select id="source-select" class="source-select" onchange="changeSource(this.value)">
-                            <option value="auto">⚡ Auto (VidLink)</option>
+                            <option disabled style="color:#ccc">PREFERRED</option>
+                            <option value="nautilus" selected>Nautilus (Ad-Free)</option>
+                            <option disabled style="color:#ccc">──────────────</option>
+                            <option value="auto">Auto (VidLink)</option>
                             <option value="VidLink">VidLink</option>
                             <option value="VidSrc.to">VidSrc.to</option>
                             <option value="VidSrc.net">VidSrc.net</option>

@@ -469,25 +469,48 @@ async function loadSource(provider) {
     select.options[select.selectedIndex].text = "Hunting...";
 
     try {
-        const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
-        const res = await fetch(apiUrl);
-        const data = await res.json();
-
-        select.options[select.selectedIndex].text = prevLabel;
-
-        if (data.type === 'embed') {
-            iframe.classList.remove('hidden');
-            iframe.src = data.url;
+        if (provider === 'nautilus') {
+            // Call MAIN FastAPI backend (relative path)
+            const scraperUrl = `/scrape?tmdbId=${currentTmdbId}&type=${currentType}&season=${currentSeason}&episode=${currentEpisode}`;
+            const res = await fetch(scraperUrl);
+            const data = await res.json();
+            
+            if (data.streamUrl) {
+                artContainer.style.display = 'block';
+                if (!art) initArtPlayer();
+                // Use the playlist URL directly (HLS)
+                art.switchUrl(data.streamUrl);
+                art.notice.show = 'Playing from Nautilus Scraper';
+            } else {
+                throw new Error("No stream found from scraper");
+            }
         } else {
-            artContainer.style.display = 'block';
-            if (!art) initArtPlayer();
-            const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
-            art.switchUrl(proxyUrl);
+            const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
+            const res = await fetch(apiUrl);
+            const data = await res.json();
+
+            if (data.type === 'embed') {
+                iframe.classList.remove('hidden');
+                iframe.src = data.url;
+            } else {
+                artContainer.style.display = 'block';
+                if (!art) initArtPlayer();
+                const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
+                art.switchUrl(proxyUrl);
+            }
         }
+        select.options[select.selectedIndex].text = prevLabel;
     } catch (e) {
         console.error(e);
         select.options[select.selectedIndex].text = "Failed";
         setTimeout(() => select.options[select.selectedIndex].text = prevLabel, 2000);
+        
+        // Fallback to Auto if Nautilus fails
+        if (provider === 'nautilus') {
+             alert("Nautilus scraper failed. Falling back to AutoEmbed.");
+             select.value = 'auto';
+             changeSource('auto');
+        }
     }
 }
 

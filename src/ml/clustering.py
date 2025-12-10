@@ -68,60 +68,108 @@ def run_clustering():
     session = Session()
 
     try:
-        df = pd.read_sql("SELECT id, title, overview FROM movies", engine)
+        # 1. Fetch Data (Text + Genres)
+        df = pd.read_sql("SELECT id, title, overview, genres FROM movies", engine)
         df = df.dropna(subset=['overview'])
         
         if len(df) < 50:
             print("Not enough data.")
             return
 
-        # CPU Vectorization (Reliable)
-        tfidf = TfidfVectorizer(stop_words='english', max_features=1000)
-        matrix = tfidf.fit_transform(df['overview'])
-        dense_matrix = matrix.toarray().astype(np.float32)
-        
-        print("Running K-Means...")
-        # Increase clusters to find more niche genres
-        kmeans = KMeans(n_clusters=8, random_state=42)
-        
-        if USING_GPU:
-            kmeans.fit(dense_matrix)
-            clusters = kmeans.predict(dense_matrix)
-            # Convert to numpy for plotting
-            try: 
-                clusters = clusters.to_numpy()
-            except Exception:
-                pass
-        else:
-            clusters = kmeans.fit_predict(dense_matrix)
-            
-        df['cluster'] = clusters
-        
-        # METRICS (Silhouette Score - CPU only)
-        # We use a subset to calculate score fast
-        sample_size = min(len(dense_matrix), 5000)
-        score = silhouette_score(dense_matrix[:sample_size], clusters[:sample_size])
-        metrics = {"silhouette_score": float(score), "n_clusters": 8}
-        print(f"Metrics: {metrics}")
+        # 2. Feature Engineering: TF-IDF on Overviews
+        print("Vectorizing Text...")
+        tfidf = TfidfVectorizer(stop_words='english', max_features=500)
+        text_matrix = tfidf.fit_transform(df['overview']).toarray()
 
-        # PCA for Visualization
-        print("Running PCA...")
-        pca = PCA(n_components=2)
-        reduced = pca.fit_transform(dense_matrix)
-        
-        if USING_GPU:
-            try: 
-                reduced = reduced.to_numpy()
+        # 3. Feature Engineering: One-Hot Encode Genres
+        print("Encoding Genres...")
+        import ast
+        def get_genre_list(x):
+            try:
+                if isinstance(x, str):
+                    return [g['name'] for g in ast.literal_eval(x)]
+                return []
             except Exception:
-                pass
-            
-        df['x'] = reduced[:, 0]
-        df['y'] = reduced[:, 1]
+                return []
+
+        df['genre_list'] = df['genres'].apply(get_genre_list)
         
-        # Plot
+        # Get all unique genres
+        all_genres = set([g for sublist in df['genre_list'] for g in sublist])
+        # Filter to top 15 to avoid noise
+        top_genres = list(all_genres)[:15] 
+        
+        genre_matrix = []
+        for _, row in df.iterrows():
+            row_genres = set(row['genre_list'])
+            vec = [1 if g in row_genres else 0 for g in top_genres]
+            genre_matrix.append(vec)
+        
+        genre_matrix = np.array(genre_matrix)
+
+        # 4. Combine Features (Text + Genres)
+        # We weight genres slightly higher (x2) because they are strong signals
+        combined_matrix = np.hstack([text_matrix, genre_matrix * 2]).astype(np.float32)
+        
+        # 5. Dimensionality Reduction (PCA)
+        # Reduce noise before clustering
+        print("Reducing Dimensions (PCA)...")
+        pca_reducer = PCA(n_components=50) # Keep 50 components
+        reduced_matrix = pca_reducer.fit_transform(combined_matrix)
+        
+        if USING_GPU and hasattr(reduced_matrix, 'to_numpy'):
+             reduced_matrix = reduced_matrix.to_numpy()
+
+        # 6. Auto-Tune K (Find best K)
+        print("Optimizing Clusters...")
+        best_score = -1
+        best_k = 8
+        best_labels = None
+        best_model = None
+        
+        # Test range of K
+        k_range = [5, 8, 12, 15]
+        
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            if USING_GPU:
+                kmeans.fit(reduced_matrix)
+                labels = kmeans.predict(reduced_matrix)
+                if hasattr(labels, 'to_numpy'): 
+                    labels = labels.to_numpy()
+            else:
+                labels = kmeans.fit_predict(reduced_matrix)
+            
+            # Calculate Silhouette Score (on subset for speed)
+            sample_size = min(len(reduced_matrix), 2000)
+            score = silhouette_score(reduced_matrix[:sample_size], labels[:sample_size])
+            print(f"K={k}, Silhouette={score:.4f}")
+            
+            if score > best_score:
+                best_score = score
+                best_k = k
+                best_labels = labels
+                best_model = kmeans
+
+        print(f"Winner: K={best_k} (Score: {best_score:.4f})")
+        df['cluster'] = best_labels
+        
+        metrics = {"silhouette_score": float(best_score), "n_clusters": best_k}
+
+        # 7. Visualization (2D PCA)
+        print("Generating Graph...")
+        pca_viz = PCA(n_components=2)
+        viz_matrix = pca_viz.fit_transform(reduced_matrix)
+        
+        if USING_GPU and hasattr(viz_matrix, 'to_numpy'):
+            viz_matrix = viz_matrix.to_numpy()
+            
+        df['x'] = viz_matrix[:, 0]
+        df['y'] = viz_matrix[:, 1]
+        
         plt.figure(figsize=(10, 8))
-        sns.scatterplot(x='x', y='y', hue='cluster', data=df, palette='viridis', alpha=0.7, legend=False)
-        plt.title(f"Movie Content Clusters (Silhouette: {score:.2f})")
+        sns.scatterplot(x='x', y='y', hue='cluster', data=df, palette='tab10', alpha=0.6, legend='full')
+        plt.title(f"Hybrid Content Clusters (K={best_k}, Score={best_score:.2f})")
         plt.savefig(os.path.join(OUTPUT_DIR, "clustering_pca.png"))
         print("Graph saved.")
         
@@ -131,14 +179,14 @@ def run_clustering():
             archive_path = f"{MODEL_PATH}_{timestamp}.bak"
             os.rename(MODEL_PATH, archive_path)
             print(f"Archived previous model to {archive_path}")  
-        joblib.dump({'model': kmeans, 'vectorizer': tfidf}, MODEL_PATH)
+        joblib.dump({'model': best_model, 'vectorizer': tfidf, 'pca': pca_reducer}, MODEL_PATH)
         
         # Register to DB
         try:
             session.query(MLModel).filter(MLModel.model_type == "clustering").update({MLModel.is_active: False})
             entry = MLModel(
-                name="Genre_Discovery_KMeans",
-                version="1.0.0",
+                name=f"Hybrid_Cluster_AutoK{best_k}",
+                version="2.0.0",
                 model_type="clustering",
                 file_path=MODEL_PATH,
                 metrics=metrics,

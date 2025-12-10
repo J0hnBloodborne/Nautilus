@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from src.core.database import get_db
 from src.core import models
 from src.services.scrapers.universal import UniversalScraper
+from src.services.scrapers.python_scraper import get_stream_url
 import httpx
 import os
 import requests
@@ -14,6 +15,7 @@ import numpy as np
 import glob
 import ctypes
 import sys
+from datetime import datetime
 from dotenv import load_dotenv
 from tensorflow import keras as _keras
 from fastapi.encoders import jsonable_encoder
@@ -120,14 +122,14 @@ def get_media_item(db, tmdb_id):
 
 @app.get("/movie/{tmdb_id}/prediction")
 def get_revenue_prediction(tmdb_id: int, db: Session = Depends(get_db)):
-    item, type = get_media_item(db, tmdb_id)
+    item, type_ = get_media_item(db, tmdb_id)
     
     if not item:
         return {"prediction": "N/A"}
     
     # Regression model was trained on Movies only (Budget/Revenue).
     # TV Shows don't fit this model well.
-    if type == 'tv':
+    if type_ == 'tv':
         return {"label": "TV SERIES", "value": "N/A"}
 
     model_path = "src/models/revenue_regressor.pkl"
@@ -135,12 +137,73 @@ def get_revenue_prediction(tmdb_id: int, db: Session = Depends(get_db)):
         return {"prediction": "N/A"}
         
     try:
+        # Fetch real details from TMDB to get Budget/Runtime/Genres
+        # The DB might lack these specific fields or they might be outdated
+        api_key = os.getenv("TMDB_API_KEY")
+        budget = 0
+        runtime = 0
+        release_month = 0
+        genres = []
+        
+        # Try to get data from item first if available (future proofing)
+        if hasattr(item, 'budget') and item.budget: 
+            budget = item.budget
+        if hasattr(item, 'runtime') and item.runtime:
+            runtime = item.runtime
+        
+        # Fetch from TMDB if missing
+        if (budget == 0 or runtime == 0) and api_key:
+            try:
+                url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}"
+                resp = requests.get(url, timeout=2)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    budget = data.get('budget', 0)
+                    runtime = data.get('runtime', 0)
+                    genres = [g['name'] for g in data.get('genres', [])]
+                    rd = data.get('release_date', '')
+                    if rd:
+                        try:
+                            release_month = datetime.strptime(rd, "%Y-%m-%d").month
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"TMDB Fetch Error: {e}")
+
+        # Fallback defaults
+        if budget == 0: 
+            budget = 1000000 # Default 1M (True Indie)
+        if runtime == 0: 
+            runtime = 90 
+        
+        # Feature Vector Construction
+        # Model expects: ['budget', 'runtime', 'release_month'] + [Action, Adventure, ..., Sci-Fi]
+        top_genres = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Drama', 'Family', 'Fantasy', 'Horror', 'Science Fiction']
+        
+        features = [budget, runtime, release_month]
+        for g in top_genres:
+            features.append(1 if g in genres else 0)
+            
+        vector = np.array([features], dtype=np.float32)
+        
         model = joblib.load(model_path)
-        features = np.array([[100000000, 120, item.popularity_score or 5.0]], dtype=np.float32)
-        prediction = model.predict(features)[0]
-        label = "BLOCKBUSTER" if prediction > 100000000 else "INDIE"
-        return {"label": label, "value": f"${prediction/1000000:.0f}M"}
-    except Exception:
+        prediction = model.predict(vector)[0]
+        
+        print(f"PREDICTION DEBUG: ID={tmdb_id} Budget=${budget} Runtime={runtime} Pred=${prediction:,.0f}")
+
+        # Dynamic Labeling
+        if prediction > 500000000:
+            label = "MEGA-HIT"
+        elif prediction > 100000000:
+            label = "BLOCKBUSTER"
+        elif prediction > 25000000:
+            label = "MAINSTREAM"
+        else:
+            label = "INDIE"
+            
+        return {"label": label, "value": f"${prediction/1000000:.1f}M"}
+    except Exception as e:
+        print(f"Prediction Error: {e}")
         return {"label": "UNKNOWN", "value": "N/A"}
 
 @app.get("/predict/genre/{tmdb_id}")
@@ -597,3 +660,17 @@ def get_ai_clusters(db: Session = Depends(get_db)):
     )
 
     return {"cluster_1": cluster_1, "cluster_2": cluster_2}
+
+@app.get("/scrape")
+async def scrape_stream_endpoint(tmdbId: str, type: str, season: int = None, episode: int = None):
+    """
+    Endpoint to scrape stream URL on demand using Playwright.
+    """
+    print(f"Received scrape request: {tmdbId} ({type})")
+    stream_url = await get_stream_url(tmdbId, type, season, episode)
+    
+    if stream_url:
+        return {"streamUrl": stream_url}
+    else:
+        # Return empty so frontend handles fallback
+        return {"streamUrl": None}

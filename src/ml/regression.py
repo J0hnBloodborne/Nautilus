@@ -72,22 +72,50 @@ def run_regression():
 
     try:
         df = pd.read_csv(RAW_DATA_PATH, low_memory=False)
-        df = df[['budget', 'runtime', 'revenue', 'vote_average']].dropna()
+        
+        # 1. Basic Cleaning
+        df = df[['budget', 'runtime', 'revenue', 'genres', 'release_date']].dropna()
         df['budget'] = pd.to_numeric(df['budget'], errors='coerce')
         df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce')
         df = df.dropna()
         df = df[df['budget'] > 1000] # Filter junk
+        df = df[df['revenue'] > 1000] # Filter junk
+
+        # 2. Feature Engineering: Release Month
+        df['release_date'] = pd.to_datetime(df['release_date'], errors='coerce')
+        df['release_month'] = df['release_date'].dt.month.fillna(0)
+
+        # 3. Feature Engineering: One-Hot Encode Top Genres
+        # Parse stringified JSON genres like [{'id': 28, 'name': 'Action'}, ...]
+        import ast
+        def get_genre_list(x):
+            try:
+                if isinstance(x, str):
+                    return [g['name'] for g in ast.literal_eval(x)]
+                return []
+            except Exception:
+                return []
+
+        df['genre_list'] = df['genres'].apply(get_genre_list)
         
+        # Top 10 Genres that impact revenue
+        top_genres = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Drama', 'Family', 'Fantasy', 'Horror', 'Science Fiction']
+        
+        for g in top_genres:
+            df[f'is_{g}'] = df['genre_list'].apply(lambda x: 1 if g in x else 0)
+
         if df.empty:
             print("No valid data.")
             return
 
-        X = df[['budget', 'runtime', 'vote_average']].astype(np.float32)
+        # Select Features (No vote_average to avoid leakage)
+        feature_cols = ['budget', 'runtime', 'release_month'] + [f'is_{g}' for g in top_genres]
+        X = df[feature_cols].astype(np.float32)
         y = df['revenue'].astype(np.float32)
         
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
-        print("Training Random Forest...")
+        print("Training Random Forest (Enhanced)...")
         model = RandomForestRegressor(n_estimators=100, random_state=42)
         model.fit(X_train, y_train)
         

@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  # 0. The Captain: Main API Application
+  app:
+    build: .
+    container_name: ai321_app
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - minio
+    environment:
+      - DATABASE_URL=postgresql://admin:password123@db:5432/ai321_db
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    # IPC host is needed for Playwright in Docker
+    ipc: host
+
   # 1. The Brain: PostgreSQL Database
   db:
     image: postgres:15-alpine
