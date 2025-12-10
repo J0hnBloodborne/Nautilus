@@ -3,6 +3,37 @@ var art = null;
 var currentTmdbId = null, currentSeason = 1, currentEpisode = 1, currentType = 'movie';
 let searchTimeout;
 
+// --- SOUND MANAGER ---
+const SoundManager = {
+    sounds: {},
+    init() {
+        // Preload sounds to reduce latency
+        ['paper', 'coin', 'wood', 'click'].forEach(name => {
+            const audio = new Audio(`/static/sounds/${name}.mp3`);
+            audio.volume = 0.6;
+            audio['coin'].volume = 1.0;
+            this.sounds[name] = audio;
+        });
+    },
+    play(name) {
+        try {
+            const audio = this.sounds[name];
+            if (audio) {
+                audio.currentTime = 0.05; // Skip first 50ms to reduce silence delay
+                audio.play().catch(() => {}); // Ignore autoplay errors
+            } else {
+                // Fallback if not preloaded
+                new Audio(`/static/sounds/${name}.mp3`).play().catch(() => {});
+            }
+        } catch (e) {
+            // Ignore audio system errors
+        }
+    }
+};
+
+// Initialize sounds on load
+document.addEventListener('DOMContentLoaded', () => SoundManager.init());
+
 // --- GUEST ID LOGIC ---
 function getGuestId() {
     let gid = localStorage.getItem('nautilus_guest_id');
@@ -58,7 +89,8 @@ function clearSearch() {
     input.value = '';
     document.getElementById('live-results').classList.add('hidden');
     if(document.getElementById('search-clear')) document.getElementById('search-clear').style.display = 'none';
-    loadHome();
+    // Do NOT reload home, just clear results
+    // loadHome(); 
 }
 
 // --- SEARCH ---
@@ -81,7 +113,7 @@ async function liveSearch(query) {
                 const img = `https://image.tmdb.org/t/p/w92${item.poster_path}`;
                 
                 div.innerHTML = `
-                    <img src="${img}" class="live-poster">
+                    <img src="${img}" class="live-poster" style="width:40px;height:60px;object-fit:cover;border:1px solid #2b1d16;">
                     <div class="live-info">
                         <span class="live-title">${title}</span>
                         <span class="live-year">${year}</span>
@@ -212,7 +244,7 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
     
     let titleHtml = `<div class="row-title">${title}`;
     if (hasRegen) {
-        titleHtml += ` <button onclick="refreshRandom(this)" style="font-size:0.6em;padding:5px 10px;background:#e50914;border:none;border-radius:4px;color:white;cursor:pointer;margin-left:10px;">Regenerate</button>`;
+        titleHtml += ` <button onclick="refreshRandom(this)" class="regen-btn">Regenerate</button>`;
     }
     titleHtml += `</div>`;
     
@@ -246,12 +278,12 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
     const prevBtn = document.createElement('button');
     prevBtn.className = 'row-arrow prev';
     prevBtn.innerHTML = '&#8249;';
-    prevBtn.onclick = () => scroller.scrollBy({ left: -1000, behavior: 'smooth' });
+    prevBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: -1000, behavior: 'smooth' }); };
     
     const nextBtn = document.createElement('button');
     nextBtn.className = 'row-arrow next';
     nextBtn.innerHTML = '&#8250;';
-    nextBtn.onclick = () => scroller.scrollBy({ left: 1000, behavior: 'smooth' });
+    nextBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: 1000, behavior: 'smooth' }); };
 
     section.appendChild(prevBtn);
     section.appendChild(nextBtn);
@@ -261,12 +293,16 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
 
 // --- MODAL ---
 function openModal(item, typeOverride=null) {
+    SoundManager.play('paper');
     const modal = document.getElementById('modal');
     const modalContent = document.getElementById('modal-content-wrapper');
     
     // Reset UI
-    modalContent.style.display = 'grid'; 
+    document.querySelector('.modal-header').classList.remove('hidden');
     document.getElementById('player-wrapper').classList.add('hidden');
+    
+    // Force show modal immediately
+    modal.classList.remove('hidden');
 
     // Smart Type Detection
     let type = typeOverride;
@@ -292,13 +328,13 @@ function openModal(item, typeOverride=null) {
         let val = item.popularity_score;
         if (val > 100) val = 98; // Cap raw scores
         else if (val <= 1) val = val * 100;
-        score = `${Math.round(val)}% Match`;
+        score = `${Math.round(val)}% Loot Value`; // Changed from "Match" to "Loot Value"
     }
     document.getElementById('m-score').textContent = score;
 
     // AI Badges (Regression & Classification)
-    const metaDiv = document.querySelector('.m-meta');
-    document.querySelectorAll('.ai-badge').forEach(e => e.remove());
+    const badgeRow = document.getElementById('ai-badges-row');
+    badgeRow.innerHTML = ''; // Clear previous badges
     
     if (isMovie) {
         const tmdbId = item.tmdb_id || item.id;
@@ -312,11 +348,11 @@ function openModal(item, typeOverride=null) {
                         const names = sorted.map(g => g.name).filter(Boolean);
                         if (names.length > 0) {
                             const text = `AI Genres: ${names.join(', ')}`;
-                            addBadge(text);
+                            addBadgeToRow(text);
                         }
                     } else if (d && d.genre) {
                         // Legacy single-genre response
-                        addBadge(`AI Genre: ${d.genre}`);
+                        addBadgeToRow(`AI Genre: ${d.genre}`);
                     }
                 } catch (err) {
                     console.error('Error rendering genre badges', err);
@@ -328,7 +364,7 @@ function openModal(item, typeOverride=null) {
         fetch(`/movie/${tmdbId}/prediction`)
             .then(r => r.json())
             .then(d => {
-                if (d && d.label) addBadge(`Forecast: ${d.label}`);
+                if (d && d.label) addBadgeToRow(`Forecast: ${d.label}`);
             })
             .catch(err => console.error('Revenue prediction failed', err));
     }
@@ -352,7 +388,7 @@ function openModal(item, typeOverride=null) {
 
                 const heading = document.createElement('div');
                 heading.textContent = 'More like this';
-                heading.style.cssText = 'font-weight:600;margin-bottom:14px;color:#fff;font-size:0.95rem;';
+                heading.style.cssText = 'font-family:var(--font-header); font-size:2rem; margin-bottom:14px; color:var(--ink); border-bottom:1px solid var(--gold); display:inline-block;';
                 panel.appendChild(heading);
 
                 const row = document.createElement('div');
@@ -396,13 +432,17 @@ function openModal(item, typeOverride=null) {
     
     // Like Button
     const likeBtn = document.createElement('button');
-    likeBtn.className = 'action-btn';
-    likeBtn.innerHTML = '❤️';
-    likeBtn.style.cssText = "background:rgba(255,255,255,0.1); border:none; color:white; padding:10px 20px; border-radius:4px; cursor:pointer; font-size:1.2rem; margin-left:10px;";
+    likeBtn.className = 'pixel-btn'; // Use standard pixel button class
+    likeBtn.innerHTML = '<i class="fa-regular fa-heart"></i>'; // Empty heart by default
+    likeBtn.style.cssText = "margin-left:10px; font-size:1.6rem; padding: 12px 18px;"; // Match play button height
     likeBtn.onclick = () => toggleLike(item, likeBtn);
     
     const playBtn = document.querySelector('#play-btn');
     if (playBtn) {
+        // Remove old like button if exists (to prevent duplicates on re-open)
+        const oldLike = playBtn.parentNode.querySelector('.pixel-btn:not(#play-btn)');
+        if(oldLike) oldLike.remove();
+        
         playBtn.parentNode.insertBefore(likeBtn, playBtn.nextSibling);
     }
 
@@ -433,7 +473,18 @@ function addBadge(text) {
     metaDiv.appendChild(badge);
 }
 
-function closeModal() { document.getElementById('modal').classList.remove('active'); closePlayer(); }
+function addBadgeToRow(text) {
+    const badgeRow = document.getElementById('ai-badges-row');
+    const span = document.createElement('span');
+    span.className = 'ai-badge';
+    span.textContent = text;
+    badgeRow.appendChild(span);
+}
+
+function closeModal() { 
+    document.getElementById('modal').classList.add('hidden'); 
+    closePlayer(); 
+}
 function backdropClose(e) { if (e.target.id === 'modal') closeModal(); }
 
 async function loadSeasons(showId) {
@@ -486,6 +537,7 @@ async function loadSeasons(showId) {
 
 // --- PLAYER LOGIC ---
 async function playVideo(type, tmdbId, season=1, episode=1) {
+    SoundManager.play('click'); // Play click sound
     currentTmdbId = tmdbId; currentType = type; currentSeason = season; currentEpisode = episode;
     
     // Record Watch History
@@ -494,7 +546,9 @@ async function playVideo(type, tmdbId, season=1, episode=1) {
     const btn = document.querySelector('#play-btn');
     if(btn) btn.innerText = "HUNTING...";
     
-    document.getElementById('modal-content-wrapper').style.display = 'none';
+    // Hide Info, Show Player
+    document.querySelector('.modal-header').classList.add('hidden');
+    document.querySelector('.close-btn').classList.add('hidden'); // Hide main close button
     document.getElementById('player-wrapper').classList.remove('hidden');
 
     loadSource('auto');
@@ -587,9 +641,17 @@ function initArtPlayer() {
 
 function closePlayer() {
     if (art) art.pause();
+    
+    // Exit Fullscreen if active
+    if (document.fullscreenElement) {
+        document.exitFullscreen().catch(err => console.log(err));
+    }
+
     document.getElementById('embed-frame').src = "about:blank";
     document.getElementById('player-wrapper').classList.add('hidden');
-    document.getElementById('modal-content-wrapper').style.display = 'grid';
+    // Show Info Again
+    document.querySelector('.modal-header').classList.remove('hidden');
+    document.querySelector('.close-btn').classList.remove('hidden'); // Show main close button
 }
 
 async function refreshRandom(btn) {
@@ -626,6 +688,7 @@ async function refreshRandom(btn) {
 
 // --- INTERACTIONS ---
 async function toggleLike(item, btn) {
+    SoundManager.play('coin');
     const tmdbId = item.tmdb_id || item.id;
     const type = (item.first_air_date || item.name) ? 'tv' : 'movie';
     
@@ -635,10 +698,14 @@ async function toggleLike(item, btn) {
     
     if (action === 'like') {
         btn.classList.add('liked');
-        btn.style.background = '#e50914';
+        btn.innerHTML = '<i class="fa-solid fa-heart"></i>'; // Full heart
+        btn.style.color = '#e50914';
+        btn.style.borderColor = '#e50914';
     } else {
         btn.classList.remove('liked');
-        btn.style.background = 'rgba(255,255,255,0.1)';
+        btn.innerHTML = '<i class="fa-regular fa-heart"></i>'; // Empty heart
+        btn.style.color = 'var(--ink)';
+        btn.style.borderColor = 'var(--ink)';
     }
     
     await sendInteraction(action, tmdbId, type);
