@@ -794,3 +794,136 @@ def get_desi_movies(limit: int = 20):
     except Exception as e:
         print(f"Error fetching Desi movies: {e}")
     return []
+
+class InteractionInput(BaseModel):
+    guest_id: str
+    item_id: int
+    media_type: str  # 'movie' or 'tv'
+    action: str      # 'like', 'watch'
+
+@app.post("/interact")
+def record_interaction(input_data: InteractionInput, db: Session = Depends(get_db)):
+    """
+    Records a user interaction (Like/Watch) for a guest user.
+    Creates a shadow user account if one doesn't exist.
+    """
+    # 1. Find or Create User
+    user = db.query(models.User).filter(models.User.username == input_data.guest_id).first()
+    if not user:
+        user = models.User(username=input_data.guest_id, email=f"{input_data.guest_id}@guest.nautilus.local")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
+    # 2. Record Interaction
+    
+    # Handle 'dislike' (Un-Like)
+    if input_data.action == 'dislike':
+        existing_like = db.query(models.Interaction).filter(
+            models.Interaction.user_id == user.id,
+            models.Interaction.movie_id == (input_data.item_id if input_data.media_type == 'movie' else None),
+            models.Interaction.tv_show_id == (input_data.item_id if input_data.media_type == 'tv' else None),
+            models.Interaction.interaction_type == 'like'
+        ).first()
+        
+        if existing_like:
+            db.delete(existing_like)
+            db.commit()
+            return {"status": "unliked", "user_id": user.id}
+        return {"status": "nothing_to_unlike", "user_id": user.id}
+
+    # Check if already exists
+    existing = db.query(models.Interaction).filter(
+        models.Interaction.user_id == user.id,
+        models.Interaction.movie_id == (input_data.item_id if input_data.media_type == 'movie' else None),
+        models.Interaction.tv_show_id == (input_data.item_id if input_data.media_type == 'tv' else None),
+        models.Interaction.interaction_type == input_data.action
+    ).first()
+    
+    if not existing:
+        interaction = models.Interaction(
+            user_id=user.id,
+            movie_id=input_data.item_id if input_data.media_type == 'movie' else None,
+            tv_show_id=input_data.item_id if input_data.media_type == 'tv' else None,
+            interaction_type=input_data.action,
+            rating_value=1.0 # Implicit positive feedback
+        )
+        db.add(interaction)
+        db.commit()
+        return {"status": "recorded", "user_id": user.id}
+    
+    return {"status": "exists", "user_id": user.id}
+
+@app.get("/recommend/guest/{guest_id}")
+def get_guest_recommendations(guest_id: str, db: Session = Depends(get_db)):
+    """
+    Hybrid Recommender for Guest Users.
+    1. Content-Based: Finds movies similar to what the user 'liked' OR 'watched'.
+    2. Fallback: Popular movies.
+    """
+    user = db.query(models.User).filter(models.User.username == guest_id).first()
+    
+    target_genres = set()
+    liked_movie_ids = []
+
+    if user:
+        # 1. Get Movie Interactions
+        movie_interactions = db.query(models.Interaction).filter(
+            models.Interaction.user_id == user.id,
+            models.Interaction.interaction_type.in_(['like', 'watch']),
+            models.Interaction.movie_id.isnot(None)
+        ).all()
+        liked_movie_ids = [i.movie_id for i in movie_interactions]
+        if liked_movie_ids:
+            movies = db.query(models.Movie).filter(models.Movie.id.in_(liked_movie_ids)).all()
+            for m in movies:
+                if m.genres and isinstance(m.genres, list):
+                    target_genres.update(m.genres)
+                elif m.genres and isinstance(m.genres, dict):
+                    target_genres.update(m.genres.keys())
+
+        # 2. Get TV Show Interactions (for genre signals)
+        tv_interactions = db.query(models.Interaction).filter(
+            models.Interaction.user_id == user.id,
+            models.Interaction.interaction_type.in_(['like', 'watch']),
+            models.Interaction.tv_show_id.isnot(None)
+        ).all()
+        tv_ids = [i.tv_show_id for i in tv_interactions]
+        if tv_ids:
+            shows = db.query(models.TVShow).filter(models.TVShow.id.in_(tv_ids)).all()
+            for s in shows:
+                if s.genres and isinstance(s.genres, list):
+                    target_genres.update(s.genres)
+                elif s.genres and isinstance(s.genres, dict):
+                    target_genres.update(s.genres.keys())
+
+    if not target_genres:
+        return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(12).all()
+
+    # Find candidates that share at least one genre, excluding already liked
+    # Note: This is a simple heuristic. For production, use vector similarity.
+    candidates = db.query(models.Movie).filter(
+        models.Movie.id.notin_(liked_movie_ids),
+        models.Movie.popularity_score.isnot(None)
+    ).order_by(models.Movie.popularity_score.desc()).limit(200).all()
+
+    scored_candidates = []
+    for cand in candidates:
+        score = 0
+        cand_genres = []
+        if cand.genres and isinstance(cand.genres, list):
+            cand_genres = cand.genres
+        elif cand.genres and isinstance(cand.genres, dict):
+            cand_genres = list(cand.genres.keys())
+            
+        # Jaccard Similarity for Genres
+        intersection = len(set(cand_genres) & target_genres)
+        if intersection > 0:
+            score = intersection
+            scored_candidates.append((cand, score))
+            
+    # Sort by score
+    scored_candidates.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return top 12
+    return [x[0] for x in scored_candidates[:12]]

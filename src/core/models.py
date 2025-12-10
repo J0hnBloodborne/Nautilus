@@ -97,7 +97,7 @@ class User(Base):
 class Interaction(Base):
     __tablename__ = 'interactions'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'))
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True) # Allow null for guest users
     
     # LINKS TO CONTENT
     movie_id = Column(Integer, ForeignKey('movies.id'), nullable=True)

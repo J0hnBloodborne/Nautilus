@@ -3,6 +3,16 @@ var art = null;
 var currentTmdbId = null, currentSeason = 1, currentEpisode = 1, currentType = 'movie';
 let searchTimeout;
 
+// --- GUEST ID LOGIC ---
+function getGuestId() {
+    let gid = localStorage.getItem('nautilus_guest_id');
+    if (!gid) {
+        gid = crypto.randomUUID();
+        localStorage.setItem('nautilus_guest_id', gid);
+    }
+    return gid;
+}
+
 // --- INIT ---
 document.addEventListener('DOMContentLoaded', () => {
     loadHome();
@@ -152,7 +162,7 @@ async function loadHome() {
         const [resMovies, resShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
             fetch(`/movies?limit=15`),
             fetch(`/shows?limit=15`),
-            fetch(`/recommend/personal/1`),
+            fetch(`/recommend/guest/${getGuestId()}`),
             fetch(`/collections/ai`),
             fetch(`/movies/desi?limit=15`),
             fetch(`/movies/genre/16?limit=15`),
@@ -384,7 +394,18 @@ function openModal(item, typeOverride=null) {
     currentSeason = 1;
     currentEpisode = 1;
     
+    // Like Button
+    const likeBtn = document.createElement('button');
+    likeBtn.className = 'action-btn';
+    likeBtn.innerHTML = '❤️';
+    likeBtn.style.cssText = "background:rgba(255,255,255,0.1); border:none; color:white; padding:10px 20px; border-radius:4px; cursor:pointer; font-size:1.2rem; margin-left:10px;";
+    likeBtn.onclick = () => toggleLike(item, likeBtn);
+    
     const playBtn = document.querySelector('#play-btn');
+    if (playBtn) {
+        playBtn.parentNode.insertBefore(likeBtn, playBtn.nextSibling);
+    }
+
     if (playBtn) {
         playBtn.style.display = isMovie ? 'block' : 'none';
         playBtn.onclick = () => playVideo(currentType, currentTmdbId);
@@ -466,6 +487,10 @@ async function loadSeasons(showId) {
 // --- PLAYER LOGIC ---
 async function playVideo(type, tmdbId, season=1, episode=1) {
     currentTmdbId = tmdbId; currentType = type; currentSeason = season; currentEpisode = episode;
+    
+    // Record Watch History
+    sendInteraction('watch', tmdbId, type);
+
     const btn = document.querySelector('#play-btn');
     if(btn) btn.innerText = "HUNTING...";
     
@@ -596,5 +621,43 @@ async function refreshRandom(btn) {
     } finally {
         btn.disabled = false;
         btn.innerText = "Regenerate";
+    }
+}
+
+// --- INTERACTIONS ---
+async function toggleLike(item, btn) {
+    const tmdbId = item.tmdb_id || item.id;
+    const type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+    
+    // Optimistic UI
+    const isLiked = btn.classList.contains('liked');
+    const action = isLiked ? 'dislike' : 'like'; // Toggle
+    
+    if (action === 'like') {
+        btn.classList.add('liked');
+        btn.style.background = '#e50914';
+    } else {
+        btn.classList.remove('liked');
+        btn.style.background = 'rgba(255,255,255,0.1)';
+    }
+    
+    await sendInteraction(action, tmdbId, type);
+}
+
+async function sendInteraction(action, tmdbId, type) {
+    const guestId = getGuestId();
+    try {
+        await fetch('/interact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                guest_id: guestId,
+                item_id: tmdbId,
+                media_type: type,
+                action: action
+            })
+        });
+    } catch (e) {
+        console.error("Interaction failed", e);
     }
 }
