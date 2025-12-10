@@ -1,9 +1,12 @@
 import pandas as pd
-from deepchecks.tabular import Dataset
-from deepchecks.tabular.suites import data_integrity
+import numpy as np
 from src.core.database import get_db
 from src.core import models
 import os
+if not hasattr(np, 'Inf'):
+    np.Inf = np.inf
+from deepchecks.tabular import Dataset
+from deepchecks.tabular.suites import data_integrity
 
 def run_data_validation():
     """
