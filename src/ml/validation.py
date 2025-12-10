@@ -24,17 +24,12 @@ def run_data_validation():
 
     data = [{
         'popularity': m.popularity_score,
-        'vote_average': m.vote_average,
-        'vote_count': m.vote_count,
-        'runtime': m.runtime,
-        'revenue': m.revenue,
-        'budget': m.budget,
         'title': m.title
     } for m in movies]
     
     df = pd.DataFrame(data)
     
-    ds = Dataset(df, label='vote_average', cat_features=['title'])
+    ds = Dataset(df, label='popularity', cat_features=['title'])
     
     integ_suite = data_integrity()
     result = integ_suite.run(ds)
