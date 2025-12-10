@@ -79,8 +79,15 @@ def test_ai_collections():
     data = response.json()
     assert "cluster_1" in data
     assert "cluster_2" in data
-    assert isinstance(data["cluster_1"], list)
-    assert isinstance(data["cluster_2"], list)
+    
+    # Updated structure: { "cluster_1": { "name": "...", "items": [...] } }
+    assert isinstance(data["cluster_1"], dict)
+    assert "items" in data["cluster_1"]
+    assert isinstance(data["cluster_1"]["items"], list)
+    
+    assert isinstance(data["cluster_2"], dict)
+    assert "items" in data["cluster_2"]
+    assert isinstance(data["cluster_2"]["items"], list)
 
 def test_revenue_prediction():
     """

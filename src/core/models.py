@@ -133,7 +133,7 @@ class MLModel(Base):
 def init_db():
     engine = create_engine(DATABASE_URL)
     Base.metadata.create_all(engine)
-    print("✅ DB Schema Synchronized.")
+    print("DB Schema Synchronized.")
 
 if __name__ == "__main__":
     init_db()
