@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, Request, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.sql import func
 from src.core.database import get_db
 from src.core import models
 from src.services.scrapers.universal import UniversalScraper
@@ -19,6 +20,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from tensorflow import keras as _keras
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
+from typing import List
 
 TMDB_GENRE_MAP = {
     28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
@@ -634,13 +637,54 @@ def get_personal_recs(user_id: int, db: Session = Depends(get_db)):
         print(f"NCF inference error: {e}")
         return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(12).all()
 
+def load_clustering_artifacts():
+    path_map = "src/models/clustering_artifacts.pkl"
+    path_meta = "src/models/clustering_metadata.pkl"
+    
+    if os.path.exists(path_map) and os.path.exists(path_meta):
+        try:
+            return joblib.load(path_map), joblib.load(path_meta)
+        except Exception as e:
+            print(f"Error loading clustering artifacts: {e}")
+    return None, None
+
 @app.get("/collections/ai")
 def get_ai_clusters(db: Session = Depends(get_db)):
     """AI genre collections for home rows.
-
-    For now this approximates genre-based groupings using existing metadata
-    and popularity bands, providing two distinct AI-flavored collections.
+    
+    Uses K-Means clusters if available, otherwise falls back to popularity bands.
     """
+    cluster_map, cluster_meta = load_clustering_artifacts()
+    
+    if cluster_map and cluster_meta:
+        # Group movie IDs by cluster
+        clusters = {}
+        for mid, cluster in cluster_map.items():
+            if cluster not in clusters:
+                clusters[cluster] = []
+            clusters[cluster].append(mid)
+            
+        # Pick two largest clusters
+        sorted_clusters = sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        response = {}
+        
+        # Return top 2 clusters with dynamic names
+        for i in range(min(2, len(sorted_clusters))):
+            c_id = sorted_clusters[i][0]
+            c_ids = sorted_clusters[i][1][:40] # Limit to 40 items
+            
+            meta = cluster_meta.get(c_id, {"name": f"AI Cluster {i+1}"})
+            movies = db.query(models.Movie).filter(models.Movie.id.in_(c_ids)).all()
+            
+            response[f"cluster_{i+1}"] = {
+                "name": f"AI Cluster: {meta['name']}",
+                "items": movies
+            }
+            
+        return response
+
+    # Fallback: Old logic
     # Top band: more "mainstream" / blockbuster-like titles
     cluster_1 = (
         db.query(models.Movie)
@@ -659,7 +703,10 @@ def get_ai_clusters(db: Session = Depends(get_db)):
         .all()
     )
 
-    return {"cluster_1": cluster_1, "cluster_2": cluster_2}
+    return {
+        "cluster_1": {"name": "AI Cluster: High Voltage", "items": cluster_1},
+        "cluster_2": {"name": "AI Cluster: Deep Cuts", "items": cluster_2}
+    }
 
 @app.get("/scrape")
 async def scrape_stream_endpoint(tmdbId: str, type: str, season: int = None, episode: int = None):
@@ -674,3 +721,76 @@ async def scrape_stream_endpoint(tmdbId: str, type: str, season: int = None, epi
     else:
         # Return empty so frontend handles fallback
         return {"streamUrl": None}
+
+class RevenueInput(BaseModel):
+    budget: float
+    runtime: float
+    release_month: int
+    genres: List[str] = []
+
+@app.post("/predict/revenue")
+def predict_revenue_manual(input_data: RevenueInput):
+    """
+    Predict revenue based on manual JSON input.
+    """
+    model_path = "src/models/revenue_regressor.pkl"
+    if not os.path.exists(model_path): 
+        return {"prediction": "N/A", "error": "Model not found"}
+        
+    try:
+        # Feature Vector Construction
+        # Model expects: ['budget', 'runtime', 'release_month'] + [Action, Adventure, ..., Sci-Fi]
+        top_genres = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Drama', 'Family', 'Fantasy', 'Horror', 'Science Fiction']
+        
+        features = [input_data.budget, input_data.runtime, input_data.release_month]
+        for g in top_genres:
+            features.append(1 if g in input_data.genres else 0)
+            
+        vector = np.array([features], dtype=np.float32)
+        
+        model = joblib.load(model_path)
+        prediction = model.predict(vector)[0]
+        
+        return {"prediction": f"${prediction:,.0f}", "raw_value": float(prediction)}
+            
+    except Exception as e:
+        print(f"Prediction Error: {e}")
+        return {"prediction": "Error", "details": str(e)}
+
+@app.get("/movies/random")
+def get_random_movies(limit: int = 20, db: Session = Depends(get_db)):
+    return db.query(models.Movie).order_by(func.random()).limit(limit).all()
+
+@app.get("/movies/genre/{genre_id}")
+def get_movies_by_genre(genre_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    # Fetch popular movies and filter by genre in Python
+    # This avoids DB-specific JSON query syntax issues
+    candidates = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(500).all()
+    filtered = []
+    for movie in candidates:
+        if movie.genres and isinstance(movie.genres, list):
+            if genre_id in movie.genres:
+                filtered.append(movie)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
+@app.get("/movies/desi")
+def get_desi_movies(limit: int = 20):
+    """Fetches popular Indian movies (Hindi, Tamil, Telugu, Malayalam) from TMDB."""
+    if not TMDB_API_KEY:
+        return []
+        
+    url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&with_original_language=hi|ta|te|ml&sort_by=popularity.desc&page=1"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            results = response.json().get('results', [])
+            # Map TMDB result keys to our frontend expectations if needed
+            # Frontend expects: id, title, poster_path, overview, etc.
+            # TMDB returns 'id', 'title', 'poster_path', 'overview', 'genre_ids', 'vote_average'
+            # This matches well enough.
+            return results[:limit]
+    except Exception as e:
+        print(f"Error fetching Desi movies: {e}")
+    return []

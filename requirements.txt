@@ -34,3 +34,4 @@ pytest
 ruff
 python-multipart
 playwright
+deepchecks

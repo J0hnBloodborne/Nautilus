@@ -56,6 +56,12 @@ jobs:
         # 2. NOW run the tests
         python -m pytest
 
+    - name: Run DeepChecks Validation
+      env:
+        DATABASE_URL: postgresql://admin:password123@localhost:5432/ai321_test
+      run: |
+        python -m src.ml.validation
+
   package-delivery:
     needs: build-and-test
     runs-on: ubuntu-latest

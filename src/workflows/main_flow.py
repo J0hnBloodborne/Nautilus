@@ -19,16 +19,17 @@ from src.ml.clustering import run_clustering
 from src.ml.association import run_association_rules
 from src.ml.time_series import run_analysis as run_time_series
 from src.ml.recommender_ncf import train_ncf
+from src.ml.validation import run_data_validation
 
 # --- CONFIG ---
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1315708367736635463/u_g-u_g-u_g"  # Placeholder
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 # --- TASKS ---
 
 @task(name="Notify Discord", retries=3)
 def notify_discord(message: str, status: str = "info"):
     """Sends a notification to Discord."""
-    if "u_g" in DISCORD_WEBHOOK_URL:
+    if not DISCORD_WEBHOOK_URL or "u_g" in DISCORD_WEBHOOK_URL:
         print(f"[Mock Discord] {status.upper()}: {message}")
         return
 
@@ -132,6 +133,16 @@ def task_train_recommender():
         print(f"NCF Recommender failed: {e}")
         return "Failed"
 
+@task(name="Validate Data (DeepChecks)")
+def task_validate_data():
+    print("Starting Data Validation Task...")
+    try:
+        run_data_validation()
+        return "Success"
+    except Exception as e:
+        print(f"Validation failed: {e}")
+        return "Failed"
+
 # --- THE FLOW ---
 
 @flow(name="Nautilus Daily Harvest", log_prints=True)
@@ -157,6 +168,7 @@ def main_flow():
         task_train_association()
         task_train_time_series()
         task_train_recommender()
+        task_validate_data()
         
         notify_discord("Pipeline Completed Successfully. All models updated.", "success")
         

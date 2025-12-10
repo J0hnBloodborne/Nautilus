@@ -108,7 +108,7 @@ def build_ffnn(input_dim: int, num_classes: int) -> keras.Model:
     return model
 
 
-def run_classification_multilabel_ffnn():
+def run_classification_multilabel_ffnn(smoke_test=False):
     print("[ML-FFNN] Fetching data (Movies + TV)...")
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
@@ -116,8 +116,9 @@ def run_classification_multilabel_ffnn():
 
     try:
         # Union Movies and TV for maximum data
-        df_movies = pd.read_sql("SELECT title, overview, genres FROM movies", engine)
-        df_shows = pd.read_sql("SELECT title, overview, genres FROM tv_shows", engine)
+        limit_clause = "LIMIT 100" if smoke_test else ""
+        df_movies = pd.read_sql(f"SELECT title, overview, genres FROM movies {limit_clause}", engine)
+        df_shows = pd.read_sql(f"SELECT title, overview, genres FROM tv_shows {limit_clause}", engine)
         df = pd.concat([df_movies, df_shows], ignore_index=True)
 
         # Basic cleaning
@@ -194,6 +195,8 @@ def run_classification_multilabel_ffnn():
         print("[ML-FFNN] Building model...")
         model = build_ffnn(input_dim=X_train.shape[1], num_classes=num_classes)
 
+        epochs = 1 if smoke_test else 80
+
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor="val_loss", patience=8, restore_best_weights=True
@@ -205,7 +208,7 @@ def run_classification_multilabel_ffnn():
             X_train,
             Y_train,
             validation_split=0.1,
-            epochs=80,
+            epochs=epochs,
             batch_size=128,
             callbacks=callbacks,
             verbose=1,
@@ -251,6 +254,10 @@ def run_classification_multilabel_ffnn():
         topk_hits = [hit_at_k(Y_test[i], topk_idx[i]) for i in range(len(Y_test))]
         topk_acc = float(np.mean(topk_hits))
         print(f"[ML-FFNN] Top-{k} hit accuracy: {topk_acc:.3f}")
+
+        if smoke_test:
+            print("[Smoke Test] Skipping model save.")
+            return
 
         # Save previous model as backup if exists
         if os.path.exists(MODEL_PATH):

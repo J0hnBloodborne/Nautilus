@@ -181,6 +181,53 @@ def run_clustering():
             print(f"Archived previous model to {archive_path}")  
         joblib.dump({'model': best_model, 'vectorizer': tfidf, 'pca': pca_reducer}, MODEL_PATH)
         
+        # Save Cluster Mapping
+        cluster_map = dict(zip(df['id'], df['cluster']))
+        joblib.dump(cluster_map, "src/models/clustering_artifacts.pkl")
+        print("Cluster mapping saved.")
+
+        # --- NEW: Generate Cluster Themes ---
+        print("Generating Cluster Themes...")
+        cluster_metadata = {}
+        feature_names = tfidf.get_feature_names_out()
+        
+        for c_id in range(best_k):
+            # Get movies in this cluster
+            cluster_movies = df[df['cluster'] == c_id]
+            
+            # 1. Top Genres
+            all_cluster_genres = [g for sublist in cluster_movies['genre_list'] for g in sublist]
+            if all_cluster_genres:
+                from collections import Counter
+                common_genres = [g[0] for g in Counter(all_cluster_genres).most_common(2)]
+                genre_str = " & ".join(common_genres)
+            else:
+                genre_str = "Mixed"
+
+            # 2. Top Keywords (TF-IDF)
+            # We can sum the TF-IDF vectors for movies in this cluster to find top words
+            # Note: text_matrix is aligned with df
+            cluster_indices = df.index[df['cluster'] == c_id]
+            if len(cluster_indices) > 0:
+                # Sum vectors for this cluster
+                cluster_vec_sum = text_matrix[cluster_indices].sum(axis=0)
+                # Get top 3 indices
+                top_indices = cluster_vec_sum.argsort()[-3:][::-1]
+                keywords = [feature_names[i] for i in top_indices]
+                keyword_str = ", ".join([k.capitalize() for k in keywords])
+            else:
+                keyword_str = "General"
+
+            theme_name = f"{genre_str}: {keyword_str}"
+            cluster_metadata[c_id] = {
+                "name": theme_name,
+                "count": len(cluster_movies)
+            }
+            print(f"Cluster {c_id}: {theme_name}")
+
+        joblib.dump(cluster_metadata, "src/models/clustering_metadata.pkl")
+        print("Cluster metadata saved.")
+        
         # Register to DB
         try:
             session.query(MLModel).filter(MLModel.model_type == "clustering").update({MLModel.is_active: False})

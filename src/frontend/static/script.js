@@ -148,18 +148,24 @@ async function loadHome() {
     container.innerHTML = '<div style="padding:40px; text-align:center;">Initializing...</div>';
     
     try {
-        // Parallel Fetch: Movies, Shows, Recs, Clusters
-        const [resMovies, resShows, resRecs, resClusters] = await Promise.all([
+        // Parallel Fetch: Movies, Shows, Recs, Clusters, Desi, Animated, Random
+        const [resMovies, resShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
             fetch(`/movies?limit=15`),
             fetch(`/shows?limit=15`),
             fetch(`/recommend/personal/1`),
-            fetch(`/collections/ai`)
+            fetch(`/collections/ai`),
+            fetch(`/movies/desi?limit=15`),
+            fetch(`/movies/genre/16?limit=15`),
+            fetch(`/movies/random?limit=15`)
         ]);
         
         const movies = await resMovies.json();
         const shows = await resShows.json();
         const recs = await resRecs.json();
         const clusters = await resClusters.json();
+        const desi = await resDesi.json();
+        const animated = await resAnimated.json();
+        const random = await resRandom.json();
         
         container.innerHTML = '';
         
@@ -169,12 +175,19 @@ async function loadHome() {
         // 2. Standard Rows
         createRow('Popular Movies', movies, 'movie');
         createRow('Popular Series', shows, 'tv');
+        
+        // 3. New Genre Rows
+        if(desi.length > 0) createRow('Desi Hits', desi, 'movie');
+        if(animated.length > 0) createRow('Animated Worlds', animated, 'movie');
+        
+        // 4. Random Row with Regen
+        if(random.length > 0) createRow('Random Picks', random, 'movie', true);
 
-        // 3. Clustering Rows
-        if(clusters.cluster_1 && clusters.cluster_1.length > 0) 
-            createRow('AI Collection: High Voltage', clusters.cluster_1, 'movie');
-        if(clusters.cluster_2 && clusters.cluster_2.length > 0) 
-            createRow('AI Collection: Deep Cuts', clusters.cluster_2, 'movie');
+        // 5. Clustering Rows
+        if(clusters.cluster_1 && clusters.cluster_1.items.length > 0) 
+            createRow(clusters.cluster_1.name, clusters.cluster_1.items, 'movie');
+        if(clusters.cluster_2 && clusters.cluster_2.items.length > 0) 
+            createRow(clusters.cluster_2.name, clusters.cluster_2.items, 'movie');
 
     } catch (err) {
         console.error(err);
@@ -182,13 +195,21 @@ async function loadHome() {
     }
 }
 
-function createRow(title, items, fixedType=null) {
+function createRow(title, items, fixedType=null, hasRegen=false) {
     const container = document.getElementById('content-area');
     const section = document.createElement('section');
     section.className = 'row-wrapper';
-    section.innerHTML = `<div class="row-title">${title}</div>`;
+    
+    let titleHtml = `<div class="row-title">${title}`;
+    if (hasRegen) {
+        titleHtml += ` <button onclick="refreshRandom(this)" style="font-size:0.6em;padding:5px 10px;background:#e50914;border:none;border-radius:4px;color:white;cursor:pointer;margin-left:10px;">Regenerate</button>`;
+    }
+    titleHtml += `</div>`;
+    
+    section.innerHTML = titleHtml;
     const scroller = document.createElement('div');
     scroller.className = 'row-scroller';
+    if (hasRegen) scroller.id = 'random-scroller';
 
     items.forEach(item => {
         const card = document.createElement('div');
@@ -544,4 +565,36 @@ function closePlayer() {
     document.getElementById('embed-frame').src = "about:blank";
     document.getElementById('player-wrapper').classList.add('hidden');
     document.getElementById('modal-content-wrapper').style.display = 'grid';
+}
+
+async function refreshRandom(btn) {
+    btn.disabled = true;
+    btn.innerText = "Loading...";
+    try {
+        const res = await fetch(`/movies/random?limit=15`);
+        const items = await res.json();
+        const scroller = document.getElementById('random-scroller');
+        scroller.innerHTML = '';
+        
+        items.forEach(item => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            let type = 'movie';
+            
+            const poster = item.poster_path 
+                ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+                : 'https://via.placeholder.com/200x300?text=No+Image';
+                
+            card.innerHTML = `
+                <img src="${poster}" alt="${item.title || item.name}" loading="lazy" class="poster">
+            `;
+            card.onclick = () => openModal(item.tmdb_id, type);
+            scroller.appendChild(card);
+        });
+    } catch (e) {
+        console.error("Regen failed", e);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Regenerate";
+    }
 }
