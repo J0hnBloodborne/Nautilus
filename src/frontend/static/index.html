@@ -3,9 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nautilus | Deep Dive</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;900&display=swap" rel="stylesheet">
+    <title>Nautilus | The Captain's Log</title>
+    
+    <!-- FONTS: Pirata One (Headers) + VT323 (Pixelated Body) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Pirata+One&family=VT323&display=swap" rel="stylesheet">
+    
+    <!-- ICONS: FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <link rel="stylesheet" href="/static/styles.css?v=pirate_v1">
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
 </head>
@@ -13,68 +21,89 @@
 
     <header>
         <div class="header-content">
-            <div class="center-title">NAUTILUS</div>
+            <div class="top-controls">
+                <a href="/admin" class="admin-link">
+                    <i class="fa-solid fa-gear"></i> Admin
+                </a>
+            </div>
+
+            <!-- Logo -->
+            <h1 class="logo" onclick="loadHome()">
+                <!-- SVG Galleon Logo -->
+                <img src="/static/152989.svg" alt="Galleon Logo" class="galleon-icon">
+                Nautilus
+            </h1>
             
             <div class="search-container">
-                <div class="search-bar">
-                    <input type="text" id="search-input" placeholder="Hunt the signal..." autocomplete="off">
-                    <button id="search-clear" onclick="clearSearch()">✕</button>
-                    <button onclick="runSearch()" style="background:none;border:none;cursor:pointer;font-size:1.2rem; color:white;">🔍</button>
-                </div>
-                <div id="live-results" class="live-dropdown hidden"></div>
+                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                <input type="text" id="search-input" placeholder="Search the Seven Seas..." autocomplete="off">
+                <button id="search-clear" onclick="clearSearch()" style="display:none;">X</button>
+                <div id="live-results" class="dropdown hidden"></div>
             </div>
         </div>
     </header>
     
-    <main id="content-area"></main>
+    <main id="content-area">
+        <!-- Dynamic Content -->
+    </main>
 
-    <div id="modal" class="modal-overlay" onclick="backdropClose(event)">
-        <div id="modal-glass" class="modal-glass">
+    <!-- Modal -->
+    <div id="modal" class="modal hidden" onclick="backdropClose(event)">
+        <div id="modal-content-wrapper" class="modal-content parchment-bg">
+            <span class="close-btn" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></span>
             
+            <!-- Player Area -->
             <div id="player-wrapper" class="hidden">
                 <div class="player-controls">
                     <div class="controls-left">
-                        <span style="color:rgba(255,255,255,0.6); font-weight:bold; font-size:0.8rem;">SOURCE:</span>
-                        <select id="source-select" class="source-select" onchange="changeSource(this.value)">
-                            <option disabled style="color:#ccc">PREFERRED</option>
-                            <option value="nautilus" selected>Nautilus (Ad-Free)</option>
-                            <option disabled style="color:#ccc">──────────────</option>
+                        <span style="color:var(--gold); font-weight:bold; font-size:1rem;">SOURCE:</span>
+                        <select id="source-select" class="pixel-select" onchange="changeSource(this.value)">
+                            <option value="nautilus" selected>★ Nautilus (Ad-Free)</option>
                             <option value="auto">Auto (VidLink)</option>
-                            <option value="VidLink">VidLink</option>
                             <option value="VidSrc.to">VidSrc.to</option>
                             <option value="VidSrc.net">VidSrc.net</option>
                             <option value="SuperEmbed">SuperEmbed</option>
-                            <option value="VidSrc.cc">VidSrc.cc</option>
-                            <option value="AutoEmbed">AutoEmbed</option>
                         </select>
                     </div>
-                    
-                    <button class="exit-btn" onclick="closePlayer()">✕ EXIT</button>
+                    <button class="pixel-btn" onclick="closePlayer()"><i class="fa-solid fa-xmark"></i> EXIT</button>
                 </div>
 
-                <div id="artplayer-app" style="width: 100%; height: 100%;"></div>
+                <div id="artplayer-app" style="height: 100%; width: 100%; display: none;"></div>
                 <iframe id="embed-frame" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
             </div>
 
-            <div id="modal-content-wrapper">
-                <button class="close-btn" style="position:absolute; top:20px; right:20px; font-size:2rem; background:none; border:none; color:white; cursor:pointer; z-index:10;" onclick="closeModal()">×</button>
-                <img id="m-poster" src="" class="m-poster" alt="Poster">
-                <div class="m-info">
+            <div class="modal-header">
+                <div class="poster-wrapper">
+                    <img id="m-poster" src="" alt="Poster">
+                </div>
+                <div class="modal-info">
                     <h2 id="m-title">Title</h2>
                     <div class="m-meta">
-                        <span id="m-year">2024</span> • <span id="m-score" class="accent">98% Match</span>
+                        <span id="m-year" class="pixel-badge">2024</span>
+                        <span id="m-score" class="pixel-badge gold"><i class="fa-solid fa-star"></i> 98% Match</span>
                     </div>
-                    <p id="m-desc">Description goes here...</p>
-                    <div class="actions">
-                        <button class="action-btn primary" id="play-btn">▶ PLAY</button>
-                        <button class="action-btn secondary" id="list-btn">+ LIST</button>
+                    
+                    <!-- AI Badges Row -->
+                    <div id="ai-badges-row" class="ai-badge-row"></div>
+
+                    <p id="m-desc">Overview...</p>
+                    
+                    <!-- Controls -->
+                    <div class="control-deck">
+                        <button id="play-btn" class="pixel-btn action"><i class="fa-solid fa-play"></i> PLAY</button>
+                        <!-- Like button is added dynamically by script.js -->
                     </div>
+
+                    <!-- TV Seasons -->
                     <div id="m-episodes" class="hidden">
-                        <h3>SEASONS</h3>
-                        <div id="ep-list" class="ep-list"></div>
+                        <h3 class="pixel-title">Ship's Log (Episodes)</h3>
+                        <div id="ep-list" class="scroll-list"></div>
                     </div>
                 </div>
             </div>
+            
+            <!-- Related -->
+            <!-- Removed "Similar Booty" section as requested -->
         </div>
     </div>
 
