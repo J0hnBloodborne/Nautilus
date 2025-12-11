@@ -1,5 +1,5 @@
 :root {
-    /* Pirate Palette - Sepia/Ink Theme */
+    /* Pirate Palette - Sepia/Ink Theme (Default Light) */
     --bg-wood: #f0e6d2; /* Main Parchment Background */
     --parchment: #f0e6d2; /* Light Parchment */
     --parchment-dark: #c5b89d; /* Accents/Borders */
@@ -15,6 +15,18 @@
     --font-pixel: 'VT323', monospace;
 }
 
+[data-theme="dark"] {
+    /* Medieval Hyprland Dark Theme */
+    --bg-wood: #1a1a1a; /* Dark Charcoal Paper */
+    --parchment: #252525; /* Dark Grey for cards/modals */
+    --parchment-dark: #333333; /* Lighter Grey for borders */
+    --ink: #e0d8c0; /* Off-white/Bone text */
+    --gold: #a8a8a8; /* Steel/Silver Accent */
+    --red: #ff4444; /* Brighter Red for visibility */
+    
+    --header-bg: rgba(26, 26, 26, 0.95);
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -26,9 +38,15 @@ body {
     color: var(--ink);
     font-family: var(--font-pixel);
     font-size: 20px;
-    /* Paper Texture Pattern */
+    /* Paper Texture Pattern (Light Mode Default) */
     background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 20px);
     min-height: 100vh;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+[data-theme="dark"] body {
+    /* Dark Mode Texture - Dark Paper */
+    background-image: repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 20px);
 }
 
 /* --- Header --- */
@@ -40,6 +58,11 @@ header {
     top: 0;
     z-index: 100;
     box-shadow: 0 4px 20px rgba(0,0,0,0.1); /* Softer shadow for light theme */
+    transition: background-color 0.3s, box-shadow 0.3s;
+}
+
+[data-theme="dark"] header {
+    box-shadow: 0 4px 20px rgba(0,0,0,0.8); /* Stronger shadow for dark theme */
 }
 
 .header-content {
@@ -87,6 +110,14 @@ header {
     letter-spacing: 4px;
     cursor: pointer;
     line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.logo-text {
+    transform: translateY(5%); /* Force move downwards */
+    display: inline-block;
 }
 
 /* --- Search --- */
@@ -563,4 +594,10 @@ main {
     margin-right: 10px;
     /* Dark Ink Tint for Sepia Theme */
     filter: sepia(100%) saturate(100%) hue-rotate(350deg) brightness(30%) drop-shadow(2px 2px 0px rgba(0,0,0,0.2));
+    transition: filter 0.3s;
+}
+
+[data-theme="dark"] .galleon-icon {
+    /* Steel/Silver for Dark Mode */
+    filter: invert(70%) grayscale(100%) brightness(130%) drop-shadow(2px 2px 0px #000);
 }
