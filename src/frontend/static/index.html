@@ -13,7 +13,7 @@
     <!-- ICONS: FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    <link rel="stylesheet" href="/static/styles.css?v=pirate_v1">
+    <link rel="stylesheet" href="/static/styles.css?v=pirate_v2">
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
 </head>
@@ -22,6 +22,9 @@
     <header>
         <div class="header-content">
             <div class="top-controls">
+                <button class="theme-toggle" onclick="toggleTheme()">
+                    <i class="fa-solid fa-moon"></i> Dark Mode
+                </button>
                 <a href="/admin" class="admin-link">
                     <i class="fa-solid fa-gear"></i> Admin
                 </a>
@@ -31,7 +34,7 @@
             <h1 class="logo" onclick="loadHome()">
                 <!-- SVG Galleon Logo -->
                 <img src="/static/152989.svg" alt="Galleon Logo" class="galleon-icon">
-                Nautilus
+                <span class="logo-text">Nautilus</span>
             </h1>
             
             <div class="search-container">
@@ -80,7 +83,7 @@
                     <h2 id="m-title">Title</h2>
                     <div class="m-meta">
                         <span id="m-year" class="pixel-badge">2024</span>
-                        <span id="m-score" class="pixel-badge gold"><i class="fa-solid fa-star"></i> 98% Match</span>
+                        <span id="m-score" class="pixel-badge"><i class="fa-solid fa-star"></i> 98% Match</span>
                     </div>
                     
                     <!-- AI Badges Row -->

@@ -93,6 +93,37 @@ function clearSearch() {
     // loadHome(); 
 }
 
+// --- THEME TOGGLE ---
+function toggleTheme() {
+    const body = document.body;
+    const current = body.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    body.setAttribute('data-theme', next);
+    localStorage.setItem('nautilus_theme', next);
+    
+    // Update Icon Text
+    const btn = document.querySelector('.theme-toggle');
+    if(next === 'dark') {
+        btn.innerHTML = '<i class="fa-solid fa-sun"></i> Light Mode';
+    } else {
+        btn.innerHTML = '<i class="fa-solid fa-moon"></i> Dark Mode';
+    }
+}
+
+// Init Theme
+const savedTheme = localStorage.getItem('nautilus_theme') || 'light';
+document.body.setAttribute('data-theme', savedTheme);
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('.theme-toggle');
+    if(btn) {
+        if(savedTheme === 'dark') {
+            btn.innerHTML = '<i class="fa-solid fa-sun"></i> Light Mode';
+        } else {
+            btn.innerHTML = '<i class="fa-solid fa-moon"></i> Dark Mode';
+        }
+    }
+});
+
 // --- SEARCH ---
 async function liveSearch(query) {
     const dropdown = document.getElementById('live-results');
