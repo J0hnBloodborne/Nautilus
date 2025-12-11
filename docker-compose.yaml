@@ -62,6 +62,16 @@ services:
     depends_on:
       - db
 
+  tunnel:
+    image: cloudflare/cloudflared
+    restart: always
+    container_name: nautilus_tunnel
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - app
+
 # 4. Network Definition
 networks:
   default:
