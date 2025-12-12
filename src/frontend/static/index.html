@@ -21,6 +21,9 @@
 
     <header>
         <div class="header-content">
+            <span style="position: absolute; left: 10px; top: 5px; font-family: var(--font-pixel); font-size: 1.2rem; color: var(--ink); opacity: 0.7;">
+                Reminder: Please use an adblocker!
+            </span>
             <div class="top-controls">
                 <button class="theme-toggle" onclick="toggleTheme()">
                     <i class="fa-solid fa-moon"></i> Dark Mode
@@ -50,6 +53,35 @@
         <!-- Dynamic Content -->
     </main>
 
+    <!-- Disclaimer Modal (First Visit) -->
+    <div id="disclaimer-modal" class="modal hidden">
+        <div class="modal-content parchment-bg" style="max-width: 600px; text-align: center; padding: 2rem;">
+            <h2 style="font-family: var(--font-header); font-size: 2.5rem; color: var(--ink); margin-bottom: 1rem;">
+                ⚓ Welcome Aboard! ⚓
+            </h2>
+            <div style="font-family: var(--font-pixel); font-size: 1.2rem; line-height: 1.6; color: var(--ink); margin-bottom: 1.5rem;">
+                <p><strong>Ahoy, Captain!</strong> This is a small educational ML project I built for learning purposes. I'm not a professional and can't block all ads on third-party embed sites.</p>
+                <p style="margin-top: 1rem;">For the best viewing experience, I <strong>highly recommend</strong> installing an adblocker:</p>
+                <ul style="list-style: none; padding: 0; margin: 1rem 0;">
+                    <li style="margin: 0.5rem 0;">
+                        <a href="https://ublockorigin.com/" target="_blank" style="color: var(--gold); text-decoration: underline;">uBlock Origin</a> (Chrome, Firefox, Edge)
+                    </li>
+                    <li style="margin: 0.5rem 0;">
+                        <a href="https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh" target="_blank" style="color: var(--gold); text-decoration: underline;">uBlock Origin Lite</a> (Chrome - Manifest V3)
+                    </li>
+                    <li style="margin: 0.5rem 0;">
+                        <a href="https://adguard.com/en/adguard-safari/overview.html" target="_blank" style="color: var(--gold); text-decoration: underline;">AdGuard for Safari</a>
+                    </li>
+                </ul>
+                <p style="margin-top: 1rem; font-size: 0.95rem; opacity: 0.8;">This message will only appear once. Safe sailing! ⛵</p>
+            </div>
+            <button id="disclaimer-close" class="pixel-btn" disabled style="opacity: 0.5; cursor: not-allowed;">
+                <span id="timer-text">Wait <span id="timer-count">15</span>s...</span>
+                <span id="close-text" style="display: none;">Set Sail! ⚓</span>
+            </button>
+        </div>
+    </div>
+
     <!-- Modal -->
     <div id="modal" class="modal hidden" onclick="backdropClose(event)">
         <div id="modal-content-wrapper" class="modal-content parchment-bg">
@@ -61,8 +93,8 @@
                     <div class="controls-left">
                         <span style="color:var(--gold); font-weight:bold; font-size:1rem;">SOURCE:</span>
                         <select id="source-select" class="pixel-select" onchange="changeSource(this.value)">
-                            <option value="nautilus" selected>★ Nautilus (Ad-Free)</option>
-                            <option value="auto">Auto (VidLink)</option>
+                            <option value="nautilus" selected>★ Nautilus (Best)</option>
+                            <option value="auto">VidLink</option>
                             <option value="VidSrc.to">VidSrc.to</option>
                             <option value="VidSrc.net">VidSrc.net</option>
                             <option value="SuperEmbed">SuperEmbed</option>

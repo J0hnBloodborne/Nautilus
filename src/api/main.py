@@ -6,7 +6,6 @@ from sqlalchemy.sql import func
 from src.core.database import get_db
 from src.core import models
 from src.services.scrapers.universal import UniversalScraper
-from src.services.scrapers.python_scraper import get_stream_url
 import httpx
 import os
 import requests
@@ -22,6 +21,9 @@ from tensorflow import keras as _keras
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from typing import List
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+
 
 TMDB_GENRE_MAP = {
     28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
@@ -708,20 +710,6 @@ def get_ai_clusters(db: Session = Depends(get_db)):
         "cluster_2": {"name": "AI Cluster: Deep Cuts", "items": cluster_2}
     }
 
-@app.get("/scrape")
-async def scrape_stream_endpoint(tmdbId: str, type: str, season: int = None, episode: int = None):
-    """
-    Endpoint to scrape stream URL on demand using Playwright.
-    """
-    print(f"Received scrape request: {tmdbId} ({type})")
-    stream_url = await get_stream_url(tmdbId, type, season, episode)
-    
-    if stream_url:
-        return {"streamUrl": stream_url}
-    else:
-        # Return empty so frontend handles fallback
-        return {"streamUrl": None}
-
 class RevenueInput(BaseModel):
     budget: float
     runtime: float
@@ -801,6 +789,41 @@ class InteractionInput(BaseModel):
     media_type: str  # 'movie' or 'tv'
     action: str      # 'like', 'watch'
 
+
+def fetch_movie_details(tmdb_id):
+    url = f"{TMDB_BASE_URL}/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+    response = requests.get(url, timeout=10)
+    if response.status_code != 200:
+        return None
+    data = response.json()
+    return {
+        'id': None,  # Let SQLAlchemy autogenerate if needed
+        'title': data.get('title'),
+        'tmdb_id': data.get('id'),
+        'overview': data.get('overview'),
+        'release_date': data.get('release_date'),
+        'genres': [g['name'] for g in data.get('genres', [])],
+        'poster_path': data.get('poster_path'),
+        'popularity_score': data.get('popularity'),
+        'stream_url': None
+    }
+
+def fetch_tv_details(tmdb_id):
+    url = f"{TMDB_BASE_URL}/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+    response = requests.get(url, timeout=10)
+    if response.status_code != 200:
+        return None
+    data = response.json()
+    return {
+        'id': None,
+        'title': data.get('name'),
+        'tmdb_id': data.get('id'),
+        'overview': data.get('overview'),
+        'genres': [g['name'] for g in data.get('genres', [])],
+        'poster_path': data.get('poster_path'),
+        'popularity_score': data.get('popularity')
+    }
+
 @app.post("/interact")
 def record_interaction(input_data: InteractionInput, db: Session = Depends(get_db)):
     """
@@ -816,7 +839,60 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
         db.refresh(user)
     
     # 2. Record Interaction
-    
+
+    # Ensure movie or TV show exists in DB, insert if missing
+    if input_data.media_type == 'movie':
+        movie = db.query(models.Movie).filter(models.Movie.id == input_data.item_id).first()
+        if not movie:
+            # Check by tmdb_id first to avoid duplicates
+            movie_by_tmdb = db.query(models.Movie).filter(models.Movie.tmdb_id == input_data.item_id).first()
+            if movie_by_tmdb:
+                movie = movie_by_tmdb
+            else:
+                movie_data = fetch_movie_details(input_data.item_id)
+                if not movie_data:
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=400, detail="Movie not found in external source.")
+                movie = models.Movie(
+                    id=movie_data['id'],
+                    title=movie_data['title'],
+                    tmdb_id=movie_data.get('tmdb_id'),
+                    overview=movie_data.get('overview'),
+                    release_date=movie_data.get('release_date'),
+                    genres=movie_data.get('genres'),
+                    poster_path=movie_data.get('poster_path'),
+                    popularity_score=movie_data.get('popularity_score'),
+                    stream_url=movie_data.get('stream_url'),
+                    is_downloaded=False,
+                    file_path=None
+                )
+                db.add(movie)
+                db.commit()
+                db.refresh(movie)
+    elif input_data.media_type == 'tv':
+        tv_show = db.query(models.TVShow).filter(models.TVShow.id == input_data.item_id).first()
+        if not tv_show:
+            tv_by_tmdb = db.query(models.TVShow).filter(models.TVShow.tmdb_id == input_data.item_id).first()
+            if tv_by_tmdb:
+                tv_show = tv_by_tmdb
+            else:
+                tv_data = fetch_tv_details(input_data.item_id)
+                if not tv_data:
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=400, detail="TV Show not found in external source.")
+                tv_show = models.TVShow(
+                    id=tv_data['id'],
+                    title=tv_data['title'],
+                    tmdb_id=tv_data.get('tmdb_id'),
+                    overview=tv_data.get('overview'),
+                    genres=tv_data.get('genres'),
+                    poster_path=tv_data.get('poster_path'),
+                    popularity_score=tv_data.get('popularity_score')
+                )
+                db.add(tv_show)
+                db.commit()
+                db.refresh(tv_show)
+
     # Handle 'dislike' (Un-Like)
     if input_data.action == 'dislike':
         existing_like = db.query(models.Interaction).filter(

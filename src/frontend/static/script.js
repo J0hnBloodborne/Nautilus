@@ -122,7 +122,45 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.innerHTML = '<i class="fa-solid fa-moon"></i> Dark Mode';
         }
     }
+    
+    // Show disclaimer modal on first visit
+    showDisclaimerIfFirstTime();
 });
+
+// --- DISCLAIMER POPUP (First Visit) ---
+function showDisclaimerIfFirstTime() {
+    const hasSeenDisclaimer = localStorage.getItem('nautilus_disclaimer_seen');
+    if (hasSeenDisclaimer) return;
+    
+    const modal = document.getElementById('disclaimer-modal');
+    const closeBtn = document.getElementById('disclaimer-close');
+    const timerText = document.getElementById('timer-text');
+    const closeText = document.getElementById('close-text');
+    const timerCount = document.getElementById('timer-count');
+    
+    modal.classList.remove('hidden');
+    
+    let countdown = 15;
+    const interval = setInterval(() => {
+        countdown--;
+        timerCount.textContent = countdown;
+        
+        if (countdown <= 0) {
+            clearInterval(interval);
+            closeBtn.disabled = false;
+            closeBtn.style.opacity = '1';
+            closeBtn.style.cursor = 'pointer';
+            timerText.style.display = 'none';
+            closeText.style.display = 'inline';
+        }
+    }, 1000);
+    
+    closeBtn.onclick = () => {
+        localStorage.setItem('nautilus_disclaimer_seen', 'true');
+        modal.classList.add('hidden');
+        SoundManager.play('paper');
+    };
+}
 
 // --- SEARCH ---
 async function liveSearch(query) {
@@ -430,7 +468,8 @@ function openModal(item, typeOverride=null) {
                     const card = document.createElement('div');
                     card.style.cssText = 'width:90px;cursor:pointer;flex-shrink:0;';
 
-                    const rType = rel.first_air_date || rel.name ? 'tv' : 'movie';
+                    // Prefer explicit media_type from backend; fall back to heuristic.
+                    const rType = rel.media_type || ((rel.first_air_date || rel.name) ? 'tv' : 'movie');
                     card.onclick = () => openModal(rel, rType);
 
                     const rName = rel.title || rel.name;
@@ -440,7 +479,7 @@ function openModal(item, typeOverride=null) {
 
                     card.innerHTML = `
                         <img src="${rImg}" style="width:100%;border-radius:6px;display:block;" loading="lazy" alt="${rName}">
-                        <div style="margin-top:6px;font-size:0.75rem;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${rName}</div>
+                        <div style="margin-top:6px;font-size:0.75rem;color:var(--ink);opacity:0.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${rName}</div>
                     `;
                     row.appendChild(card);
                 });
