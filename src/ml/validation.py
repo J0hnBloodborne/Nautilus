@@ -126,6 +126,31 @@ def run_data_validation():
     except Exception as e:
         print(f"Failed to write summary JSON: {e}")
 
+    # Also write a minimal static HTML summary page (useful when the full
+    # DeepChecks HTML/JS bundle fails to run in some viewers or when opened
+    # via file:// which may block scripts). This is lightweight and always
+    # human-readable in any browser.
+    try:
+        html_summary_path = os.path.join('reports', 'data_integrity_summary.html')
+        with open(html_summary_path, 'w') as h:
+            h.write("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n")
+            h.write("<title>DeepChecks Summary</title>\n</head><body>\n")
+            h.write("<h1>DeepChecks Data Integrity Summary</h1>\n")
+            h.write(f"<p><strong>Passed:</strong> {passed}</p>\n")
+            h.write(f"<p><strong>Failed checks:</strong> {len(failed_summaries)}</p>\n")
+            if failed_summaries:
+                h.write('<ul>\n')
+                for fc in failed_summaries[:10]:
+                    name = fc.get('name') or fc.get('header') or fc.get('repr')
+                    h.write(f"<li>{name}</li>\n")
+                h.write('</ul>\n')
+            h.write("<p>Full interactive report: <a href=\"data_integrity_report.html\">data_integrity_report.html</a></p>\n")
+            h.write(f"<pre>{json.dumps(summary, indent=2)}</pre>\n")
+            h.write("</body></html>")
+        print(f"HTML summary saved to {html_summary_path}")
+    except Exception as e:
+        print(f"Failed to write HTML summary: {e}")
+
     return passed
 
 
