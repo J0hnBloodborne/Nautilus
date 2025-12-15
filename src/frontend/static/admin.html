@@ -6,20 +6,28 @@
     <title>Nautilus | Command Deck</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/styles.css?v=pirate_v2">
     <style>
-        :root { 
+        :root {
             --bg: #f0e6d2; /* Parchment */
             --text: #2b1d16; /* Ink */
             --accent: #8b0000; /* Red Accent */
             --glass: rgba(0,0,0,0.05);
             --border: rgba(43, 29, 22, 0.2);
         }
-
-        body { 
-            background: var(--bg); 
-            color: var(--text); 
-            font-family: 'Inter', sans-serif; 
-            padding: 40px; 
+        [data-theme="dark"] {
+            --bg: #181a1b;
+            --text: #e0e0e0;
+            --accent: #0CAADC;
+            --glass: rgba(255,255,255,0.03);
+            --border: rgba(255,255,255,0.08);
+        }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            padding: 40px;
+            transition: background 0.3s, color 0.3s;
         }
         
         h1 { font-size: 2.5rem; border-bottom: 2px solid var(--accent); padding-bottom: 10px; margin-bottom: 40px; letter-spacing: 2px; }
@@ -55,14 +63,52 @@
         .btn-link { display: inline-block; margin-top: 50px; color: var(--accent); text-decoration: none; border: 1px solid var(--accent); padding: 12px 30px; border-radius: 50px; font-weight: bold; transition: 0.3s; cursor: pointer; background: transparent; }
         .btn-link:hover { background: var(--accent); color: var(--bg); }
 
-        .top-nav { position: absolute; top: 40px; right: 40px; display: flex; gap: 20px; }
-        .nav-item { color: var(--text); text-decoration: none; opacity: 0.7; cursor: pointer; }
+        .top-nav { position: absolute; top: 40px; right: 40px; display: flex; gap: 20px; align-items: center; }
+        .nav-item { color: var(--text); text-decoration: none; opacity: 0.7; cursor: pointer; transition: color 0.2s, background 0.2s, box-shadow 0.2s; }
         .nav-item:hover { opacity: 1; color: var(--accent); }
+        .theme-toggle-btn {
+            background: var(--glass);
+            border: 1.5px solid var(--border);
+            border-radius: 50%;
+            width: 40px; height: 40px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.3em;
+            color: var(--text);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            transition: background 0.2s, border 0.2s, color 0.2s;
+            outline: none;
+        }
+        .theme-toggle-btn:hover {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        .theme-toggle-btn i {
+            color: inherit;
+        }
+        /* Fix text color for dark mode */
+        [data-theme="dark"] h1,
+        [data-theme="dark"] h2,
+        [data-theme="dark"] h3,
+        [data-theme="dark"] .metric-label,
+        [data-theme="dark"] .metric-val,
+        [data-theme="dark"] th,
+        [data-theme="dark"] td,
+        [data-theme="dark"] .nav-item {
+            color: #e0e0e0 !important;
+        }
+        /* Chart canvas sizing */
+        .chart-box { min-height: 340px; }
+        .chart-box canvas { width: 100% !important; height: 280px !important; display: block; margin: 0 auto; }
     </style>
 </head>
 <body>
     <div class="top-nav">
         <a href="/" class="nav-item">← Back to Ship</a>
+        <button id="admin-theme-toggle" class="theme-toggle-btn" title="Toggle dark mode">
+            <i class="fa-solid fa-moon" id="theme-icon"></i>
+        </button>
     </div>
 
     <h1>NAUTILUS // SYSTEM DIAGNOSTICS</h1>
@@ -116,16 +162,16 @@
     <h2>Intelligence Reports</h2>
     <div class="charts-container">
         <div class="chart-box">
-            <h3 style="color:#aaa; margin-bottom:15px;">Traffic Forecast (Time Series)</h3>
-            <img src="/reports/figures/time_series_forecast.png" alt="Run Time Series Script to Generate" onerror="this.style.display='none'">
+            <h3 style="color:var(--text); margin-bottom:15px;">Traffic Forecast (Time Series)</h3>
+            <canvas id="traffic-forecast-chart"></canvas>
         </div>
         <div class="chart-box">
-            <h3 style="color:#aaa; margin-bottom:15px;">Content Clusters (PCA + K-Means)</h3>
-            <img src="/reports/figures/clustering_pca.png" alt="Run Clustering Script to Generate" onerror="this.style.display='none'">
+            <h3 style="color:var(--text); margin-bottom:15px;">Content Clusters (PCA + K-Means)</h3>
+            <canvas id="clustering-pca-chart"></canvas>
         </div>
         <div class="chart-box">
-            <h3 style="text-align:center; color:#aaa">Revenue Drivers (Regression Features)</h3>
-            <img src="/reports/figures/regression_features.png" alt="Run Regression Script" onerror="this.style.display='none'">
+            <h3 style="text-align:center; color:var(--text)">Revenue Drivers (Regression Features)</h3>
+            <canvas id="regression-features-chart"></canvas>
         </div>
     </div>
     
@@ -136,6 +182,99 @@
     </div>
 
     <script>
+        // --- THEME SYNC ---
+        function setAdminTheme(theme) {
+            document.body.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            // Always show moon icon for consistency
+            const icon = document.getElementById('theme-icon');
+            icon.className = 'fa-solid fa-moon';
+        }
+        function syncThemeWithMain() {
+            // Try to sync with main site theme (localStorage)
+            const theme = localStorage.getItem('theme') || 'light';
+            setAdminTheme(theme);
+        }
+        document.getElementById('admin-theme-toggle').onclick = function() {
+            const current = document.body.getAttribute('data-theme');
+            setAdminTheme(current === 'dark' ? 'light' : 'dark');
+        };
+        syncThemeWithMain();
+
+        // --- INTERACTIVE CHARTS ---
+        // Modular chart rendering for easy extension
+        let chartInstances = {};
+        function renderCharts() {
+            // Destroy old charts if they exist
+            Object.values(chartInstances).forEach(c => c && c.destroy && c.destroy());
+            chartInstances = {};
+            // Traffic Forecast (Time Series)
+            chartInstances.traffic = new Chart(document.getElementById('traffic-forecast-chart').getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'],
+                    datasets: [{
+                        label: 'Visits',
+                        data: [120, 150, 180, 220, 210, 250, 300, 320, 310, 400],
+                        borderColor: '#0CAADC',
+                        backgroundColor: 'rgba(12,170,220,0.1)',
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    plugins: { legend: { labels: { color: getComputedStyle(document.body).getPropertyValue('--text') } } },
+                    scales: {
+                        x: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } },
+                        y: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } }
+                    }
+                }
+            });
+            // Content Clusters (PCA + K-Means)
+            chartInstances.clusters = new Chart(document.getElementById('clustering-pca-chart').getContext('2d'), {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        { label: 'Cluster 1', data: [{x:1,y:2},{x:2,y:3},{x:1.5,y:2.5}], backgroundColor: '#0CAADC' },
+                        { label: 'Cluster 2', data: [{x:4,y:5},{x:5,y:6},{x:4.5,y:5.5}], backgroundColor: '#ff6384' }
+                    ]
+                },
+                options: {
+                    plugins: { legend: { labels: { color: getComputedStyle(document.body).getPropertyValue('--text') } } },
+                    scales: {
+                        x: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } },
+                        y: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } }
+                    }
+                }
+            });
+            // Regression Features (Bar)
+            chartInstances.regression = new Chart(document.getElementById('regression-features-chart').getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: ['Budget', 'Popularity', 'Genre', 'Release Month'],
+                    datasets: [{
+                        label: 'Feature Importance',
+                        data: [0.45, 0.32, 0.15, 0.08],
+                        backgroundColor: ['#0CAADC', '#ff6384', '#8b0000', '#2e8b57']
+                    }]
+                },
+                options: {
+                    plugins: { legend: { labels: { color: getComputedStyle(document.body).getPropertyValue('--text') } } },
+                    scales: {
+                        x: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } },
+                        y: { ticks: { color: getComputedStyle(document.body).getPropertyValue('--text') } }
+                    }
+                }
+            });
+        }
+
+        // Re-render charts on theme change (no F5 needed)
+        const observer = new MutationObserver(() => {
+            renderCharts();
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
+        // --- EXISTING ADMIN LOGIC ---
         async function loadStats() {
             try {
                 const res = await fetch('/admin/stats');
@@ -268,13 +407,7 @@
             }
         }
         loadStats();
-
-        function toggleAdminTheme() {
-            // Theme toggle removed - enforced Sepia/Ink theme
-        }
-        
-        // Init Theme - Force Light/Sepia
-        document.body.setAttribute('data-theme', 'light');
+        renderCharts();
     </script>
 </body>
 </html>

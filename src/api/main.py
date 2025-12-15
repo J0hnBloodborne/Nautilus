@@ -840,68 +840,63 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
     
     # 2. Record Interaction
 
-    # Ensure movie or TV show exists in DB, insert if missing
+    # Ensure movie or TV show exists in DB, insert if missing, always use DB id for interaction
     if input_data.media_type == 'movie':
-        movie = db.query(models.Movie).filter(models.Movie.id == input_data.item_id).first()
+        # Try to find by tmdb_id first (since item_id may be tmdb_id from frontend)
+        movie = db.query(models.Movie).filter(models.Movie.tmdb_id == input_data.item_id).first()
         if not movie:
-            # Check by tmdb_id first to avoid duplicates
-            movie_by_tmdb = db.query(models.Movie).filter(models.Movie.tmdb_id == input_data.item_id).first()
-            if movie_by_tmdb:
-                movie = movie_by_tmdb
-            else:
-                movie_data = fetch_movie_details(input_data.item_id)
-                if not movie_data:
-                    from fastapi import HTTPException
-                    raise HTTPException(status_code=400, detail="Movie not found in external source.")
-                movie = models.Movie(
-                    id=movie_data['id'],
-                    title=movie_data['title'],
-                    tmdb_id=movie_data.get('tmdb_id'),
-                    overview=movie_data.get('overview'),
-                    release_date=movie_data.get('release_date'),
-                    genres=movie_data.get('genres'),
-                    poster_path=movie_data.get('poster_path'),
-                    popularity_score=movie_data.get('popularity_score'),
-                    stream_url=movie_data.get('stream_url'),
-                    is_downloaded=False,
-                    file_path=None
-                )
-                db.add(movie)
-                db.commit()
-                db.refresh(movie)
+            # Fetch from TMDB and insert
+            movie_data = fetch_movie_details(input_data.item_id)
+            if not movie_data:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Movie not found in external source.")
+            movie = models.Movie(
+                title=movie_data['title'],
+                tmdb_id=movie_data.get('tmdb_id'),
+                overview=movie_data.get('overview'),
+                release_date=movie_data.get('release_date'),
+                genres=movie_data.get('genres'),
+                poster_path=movie_data.get('poster_path'),
+                popularity_score=movie_data.get('popularity_score'),
+                stream_url=movie_data.get('stream_url'),
+                is_downloaded=False,
+                file_path=None
+            )
+            db.add(movie)
+            db.commit()
+            db.refresh(movie)
+        # Always use the DB id for the interaction
+        item_db_id = movie.id
     elif input_data.media_type == 'tv':
-        tv_show = db.query(models.TVShow).filter(models.TVShow.id == input_data.item_id).first()
+        tv_show = db.query(models.TVShow).filter(models.TVShow.tmdb_id == input_data.item_id).first()
         if not tv_show:
-            tv_by_tmdb = db.query(models.TVShow).filter(models.TVShow.tmdb_id == input_data.item_id).first()
-            if tv_by_tmdb:
-                tv_show = tv_by_tmdb
-            else:
-                tv_data = fetch_tv_details(input_data.item_id)
-                if not tv_data:
-                    from fastapi import HTTPException
-                    raise HTTPException(status_code=400, detail="TV Show not found in external source.")
-                tv_show = models.TVShow(
-                    id=tv_data['id'],
-                    title=tv_data['title'],
-                    tmdb_id=tv_data.get('tmdb_id'),
-                    overview=tv_data.get('overview'),
-                    genres=tv_data.get('genres'),
-                    poster_path=tv_data.get('poster_path'),
-                    popularity_score=tv_data.get('popularity_score')
-                )
-                db.add(tv_show)
-                db.commit()
-                db.refresh(tv_show)
+            tv_data = fetch_tv_details(input_data.item_id)
+            if not tv_data:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="TV Show not found in external source.")
+            tv_show = models.TVShow(
+                title=tv_data['title'],
+                tmdb_id=tv_data.get('tmdb_id'),
+                overview=tv_data.get('overview'),
+                genres=tv_data.get('genres'),
+                poster_path=tv_data.get('poster_path'),
+                popularity_score=tv_data.get('popularity_score')
+            )
+            db.add(tv_show)
+            db.commit()
+            db.refresh(tv_show)
+        item_db_id = tv_show.id
+    else:
+        item_db_id = input_data.item_id
 
     # Handle 'dislike' (Un-Like)
     if input_data.action == 'dislike':
         existing_like = db.query(models.Interaction).filter(
             models.Interaction.user_id == user.id,
-            models.Interaction.movie_id == (input_data.item_id if input_data.media_type == 'movie' else None),
-            models.Interaction.tv_show_id == (input_data.item_id if input_data.media_type == 'tv' else None),
+            models.Interaction.movie_id == (item_db_id if input_data.media_type == 'movie' else None),
+            models.Interaction.tv_show_id == (item_db_id if input_data.media_type == 'tv' else None),
             models.Interaction.interaction_type == 'like'
         ).first()
-        
         if existing_like:
             db.delete(existing_like)
             db.commit()
@@ -911,23 +906,21 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
     # Check if already exists
     existing = db.query(models.Interaction).filter(
         models.Interaction.user_id == user.id,
-        models.Interaction.movie_id == (input_data.item_id if input_data.media_type == 'movie' else None),
-        models.Interaction.tv_show_id == (input_data.item_id if input_data.media_type == 'tv' else None),
+        models.Interaction.movie_id == (item_db_id if input_data.media_type == 'movie' else None),
+        models.Interaction.tv_show_id == (item_db_id if input_data.media_type == 'tv' else None),
         models.Interaction.interaction_type == input_data.action
     ).first()
-    
     if not existing:
         interaction = models.Interaction(
             user_id=user.id,
-            movie_id=input_data.item_id if input_data.media_type == 'movie' else None,
-            tv_show_id=input_data.item_id if input_data.media_type == 'tv' else None,
+            movie_id=item_db_id if input_data.media_type == 'movie' else None,
+            tv_show_id=item_db_id if input_data.media_type == 'tv' else None,
             interaction_type=input_data.action,
             rating_value=1.0 # Implicit positive feedback
         )
         db.add(interaction)
         db.commit()
         return {"status": "recorded", "user_id": user.id}
-    
     return {"status": "exists", "user_id": user.id}
 
 @app.get("/recommend/guest/{guest_id}")
