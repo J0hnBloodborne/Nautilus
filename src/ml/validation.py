@@ -13,6 +13,7 @@ if not hasattr(np, 'Inf'):
 
 from deepchecks.tabular import Dataset
 from deepchecks.tabular.suites import data_integrity
+from deepchecks.core.errors import ValidationError
 
 
 def run_data_validation():
@@ -55,10 +56,61 @@ def run_data_validation():
         else:
             df['popularity'] = df['popularity'].fillna(df['popularity'].median())
 
-    ds = Dataset(df, label='popularity', cat_features=['title'])
+    # Decide whether to provide a label. DeepChecks may infer a classification
+    # task if the label has few unique values; when there's only one unique
+    # label (common in tiny seeded datasets) some checks will raise a
+    # ValidationError. In that case run the suite without a label.
+    label_col = 'popularity' if 'popularity' in df.columns else None
+    if label_col is not None:
+        try:
+            unique_labels = int(df[label_col].nunique(dropna=True))
+        except Exception:
+            unique_labels = 0
+    else:
+        unique_labels = 0
+
+    if label_col and unique_labels >= 2:
+        ds = Dataset(df, label=label_col, cat_features=['title'])
+    else:
+        if label_col and unique_labels < 2:
+            print("Only one unique label found; running DeepChecks suite without a label column.")
+        ds = Dataset(df, cat_features=['title'])
 
     integ_suite = data_integrity()
-    result = integ_suite.run(ds)
+    try:
+        result = integ_suite.run(ds)
+    except ValidationError as e:
+        # Write a summary JSON/HTML so CI artifacts are still useful
+        err_msg = str(e)
+        print("DeepChecks ValidationError:", err_msg)
+        os.makedirs('reports', exist_ok=True)
+        summary = {
+            'passed': False,
+            'failed_count': 1,
+            'failed_checks': [{'error': err_msg}]
+        }
+        summary_path = os.path.join('reports', 'data_integrity_summary.json')
+        try:
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2)
+            print(f"Summary JSON saved to {summary_path}")
+        except Exception as ee:
+            print(f"Failed to write summary JSON after ValidationError: {ee}")
+
+        # Minimal HTML summary
+        try:
+            html_summary_path = os.path.join('reports', 'data_integrity_summary.html')
+            with open(html_summary_path, 'w') as h:
+                h.write("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n")
+                h.write("<title>DeepChecks Summary - Error</title>\n</head><body>\n")
+                h.write("<h1>DeepChecks Data Integrity - Error</h1>\n")
+                h.write(f"<p><strong>Error:</strong> {err_msg}</p>\n")
+                h.write("</body></html>")
+            print(f"HTML summary saved to {html_summary_path}")
+        except Exception as ee:
+            print(f"Failed to write HTML summary after ValidationError: {ee}")
+
+        return False
 
     # Save Report to the path expected by the admin UI
     report_path = "reports/data_integrity_report.html"
