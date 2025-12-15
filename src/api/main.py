@@ -83,6 +83,8 @@ app.mount("/static", StaticFiles(directory="src/frontend/static"), name="static"
 # MOUNT GENERATED GRAPHS (Crucial for Admin Dashboard)
 # Mount reports to match the HTML path
 app.mount("/reports/figures", StaticFiles(directory="reports/figures"), name="reports_figures")
+# Serve any generated reports (DeepChecks etc.) from /reports
+app.mount("/reports", StaticFiles(directory="reports"), name="reports")
 
 @app.get("/")
 async def read_index():
