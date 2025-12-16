@@ -736,6 +736,45 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
     # If DB ratings are sparse (few movies), fall back to MovieLens historical ratings
     # so we can surface all-time classics rather than site-specific popular items.
 
+    # 1.5) Check for a precomputed MovieLens cache to avoid streaming large CSVs
+    try:
+        cache_path = Path('data/processed/top_rated_movies.json')
+        if cache_path.exists():
+            try:
+                payload = json.loads(cache_path.read_text(encoding='utf-8'))
+                items = payload.get('items', [])[:limit]
+                cached_out = []
+                for it in items:
+                    tmdb = it.get('tmdb_id')
+                    avg = it.get('avg_rating')
+                    cnt = it.get('vote_count')
+                    title = it.get('title')
+                    m = None
+                    if tmdb:
+                        # tmdb ids in cache may be strings; try to coerce
+                        try:
+                            tid = int(tmdb)
+                        except Exception:
+                            tid = tmdb
+                        m = db.query(models.Movie).filter(models.Movie.tmdb_id == tid).first()
+
+                    rec = {
+                        'title': title if title else (m.title if m else None),
+                        'tmdb_id': int(tmdb) if tmdb is not None else None,
+                        'avg_rating': float(avg) if avg is not None else None,
+                        'vote_count': int(cnt) if cnt is not None else None,
+                        'poster_path': m.poster_path if m else None,
+                        'release_date': m.release_date if m else None,
+                        'popularity_score': m.popularity_score if m else None
+                    }
+                    cached_out.append(rec)
+                if cached_out:
+                    return cached_out
+            except Exception as e:
+                print(f"cache read error: {e}")
+    except Exception:
+        pass
+
     # 2) Fallback to MovieLens ratings files (streaming CSV) if present
     import csv
     import glob
@@ -1056,10 +1095,22 @@ class RevenueInput(BaseModel):
     budget: float
     runtime: float
     release_month: int
+    release_year: int | None = None
     genres: List[str] = []
 
+
+_CPI_INDEX = {
+    # Approximate CPI-U annual averages (used to compute multiplier). Add/adjust values as needed.
+    2000: 172.2, 2001: 177.1, 2002: 179.9, 2003: 184.0, 2004: 188.9,
+    2005: 195.3, 2006: 201.6, 2007: 207.3, 2008: 215.3, 2009: 214.5,
+    2010: 218.1, 2011: 224.9, 2012: 229.6, 2013: 233.0, 2014: 236.7,
+    2015: 237.0, 2016: 240.0, 2017: 245.1, 2018: 251.1, 2019: 255.7,
+    2020: 258.8, 2021: 271.0, 2022: 292.7, 2023: 305.1, 2024: 313.0, 2025: 315.0
+}
+
+
 @app.post("/predict/revenue")
-def predict_revenue_manual(input_data: RevenueInput):
+def predict_revenue_manual(input_data: RevenueInput, inflation_multiplier: float = 1.0, use_cpi: bool = False):
     """
     Predict revenue based on manual JSON input.
     """
@@ -1080,8 +1131,25 @@ def predict_revenue_manual(input_data: RevenueInput):
         
         model = joblib.load(model_path)
         prediction = model.predict(vector)[0]
-        
-        return {"prediction": f"${prediction:,.0f}", "raw_value": float(prediction)}
+        raw_value = float(prediction)
+        # Optionally compute inflation multiplier using CPI index if requested
+        final_multiplier = float(inflation_multiplier)
+        try:
+            if use_cpi and input_data.release_year:
+                current_year = max(_CPI_INDEX.keys())
+                cpi_current = _CPI_INDEX.get(current_year)
+                cpi_release = _CPI_INDEX.get(int(input_data.release_year))
+                if cpi_current and cpi_release:
+                    final_multiplier = float(cpi_current) / float(cpi_release)
+        except Exception:
+            pass
+
+        try:
+            adjusted = float(raw_value) * final_multiplier
+        except Exception:
+            adjusted = raw_value
+
+        return {"prediction": f"${adjusted:,.0f}", "raw_value": raw_value, "inflation_multiplier": final_multiplier}
             
     except Exception as e:
         print(f"Prediction Error: {e}")
@@ -1266,7 +1334,7 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
     return {"status": "exists", "user_id": user.id}
 
 @app.get("/recommend/guest/{guest_id}")
-def get_guest_recommendations(guest_id: str, db: Session = Depends(get_db)):
+def get_guest_recommendations(guest_id: str, request: Request, db: Session = Depends(get_db)):
     """
     Hybrid Recommender for Guest Users.
     1. Content-Based: Finds movies similar to what the user 'liked' OR 'watched'.
@@ -1308,15 +1376,43 @@ def get_guest_recommendations(guest_id: str, db: Session = Depends(get_db)):
                 elif s.genres and isinstance(s.genres, dict):
                     target_genres.update(s.genres.keys())
 
+    # Apply client-provided preferences (if any) via header X-User-Prefs: JSON string
+    try:
+        prefs_raw = request.headers.get('x-user-prefs')
+        if prefs_raw:
+            import json as _json
+            prefs = _json.loads(prefs_raw)
+            # Accept a simple structure: { "genres": ["Drama","Action"], "min_popularity": 5 }
+            if isinstance(prefs, dict):
+                genres_pref = prefs.get('genres') or prefs.get('preferred_genres')
+                if genres_pref and isinstance(genres_pref, list):
+                    for g in genres_pref:
+                        try:
+                            target_genres.add(g)
+                        except Exception:
+                            pass
+                # Optional min_popularity can filter candidates later (handled below)
+                min_pop_pref = prefs.get('min_popularity') if isinstance(prefs.get('min_popularity'), (int, float)) else None
+            else:
+                min_pop_pref = None
+        else:
+            min_pop_pref = None
+    except Exception:
+        min_pop_pref = None
+
     if not target_genres:
         return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(12).all()
 
     # Find candidates that share at least one genre, excluding already liked
     # Note: This is a simple heuristic. For production, use vector similarity.
-    candidates = db.query(models.Movie).filter(
-        models.Movie.id.notin_(liked_movie_ids),
-        models.Movie.popularity_score.isnot(None)
-    ).order_by(models.Movie.popularity_score.desc()).limit(200).all()
+    # Allow client preference to raise popularity floor if provided
+    candidates_q = db.query(models.Movie).filter(models.Movie.id.notin_(liked_movie_ids), models.Movie.popularity_score.isnot(None)).order_by(models.Movie.popularity_score.desc())
+    if min_pop_pref is not None:
+        try:
+            candidates_q = candidates_q.filter(models.Movie.popularity_score >= float(min_pop_pref))
+        except Exception:
+            pass
+    candidates = candidates_q.limit(500).all()
 
     scored_candidates = []
     for cand in candidates:
@@ -1336,5 +1432,47 @@ def get_guest_recommendations(guest_id: str, db: Session = Depends(get_db)):
     # Sort by score
     scored_candidates.sort(key=lambda x: x[1], reverse=True)
     
-    # Return top 12
+    # Before returning content-based results, try to use the NCF model if available
+    try:
+        model, artifacts = load_recommender_ncf()
+        if model is not None and artifacts is not None:
+            user_id_to_idx = artifacts.get('user_id_to_idx', {})
+            movie_id_to_idx = artifacts.get('movie_id_to_idx', {})
+
+            # If the guest has liked movies, try to find an existing similar user by overlap
+            similar_user_idx = None
+            if liked_movie_ids:
+                # Find users who interacted with the same movies and pick the one with largest overlap
+                rows = db.query(models.Interaction.user_id, func.count(models.Interaction.id).label('cnt'))\
+                         .filter(models.Interaction.movie_id.in_(liked_movie_ids), models.Interaction.interaction_type.in_(['like','watch']))\
+                         .group_by(models.Interaction.user_id).order_by(func.count(models.Interaction.id).desc()).limit(10).all()
+                for r in rows:
+                    uid = r[0]
+                    if uid in user_id_to_idx:
+                        similar_user_idx = user_id_to_idx[uid]
+                        break
+
+            # If we found a similar user index and have candidate item idxs, run NCF inference
+            if similar_user_idx is not None:
+                import numpy as _np
+                # Build candidate list filtered to those present in artifacts
+                candidate_item_ids = [int(c.id) for c in candidates if c.id in movie_id_to_idx]
+                candidate_item_idxs = [movie_id_to_idx[cid] for cid in candidate_item_ids]
+                if candidate_item_idxs:
+                    user_arr = _np.full(len(candidate_item_idxs), similar_user_idx, dtype=_np.int32)
+                    item_arr = _np.array(candidate_item_idxs, dtype=_np.int32)
+                    scores = model.predict([user_arr, item_arr], verbose=0).reshape(-1)
+                    if scores.size > 0:
+                        order = _np.argsort(-scores)[:12]
+                        top_movie_ids = [candidate_item_ids[i] for i in order]
+                        movies = db.query(models.Movie).filter(models.Movie.id.in_(top_movie_ids)).all()
+                        by_id = {m.id: m for m in movies}
+                        ordered = [by_id[mid] for mid in top_movie_ids if mid in by_id]
+                        if ordered:
+                            return ordered
+    except Exception as e:
+        # NCF path failed; fall back to content-based
+        print(f"Guest NCF attempt failed: {e}")
+
+    # Return top 12 content-based candidates
     return [x[0] for x in scored_candidates[:12]]

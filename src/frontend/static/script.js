@@ -44,6 +44,25 @@ function getGuestId() {
     return gid;
 }
 
+// --- USER PREFERENCES (localStorage) ---
+function setUserPrefs(prefs) {
+    try {
+        localStorage.setItem('nautilus_user_prefs', JSON.stringify(prefs));
+    } catch (e) {
+        console.error('Failed to save prefs', e);
+    }
+}
+
+function getUserPrefs() {
+    try {
+        const raw = localStorage.getItem('nautilus_user_prefs');
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
 // --- INIT ---
 document.addEventListener('DOMContentLoaded', () => {
     loadHome();
@@ -262,10 +281,16 @@ async function loadHome() {
         // Parallel Fetch: New Releases & Top Rated (movies & shows), Recs, Clusters, Desi, Animated, Random
         const [resNewMovies, resTopMovies, resNewShows, resTopShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
             fetch(`/movies/new_releases?days=60&limit=50`),
-            fetch(`/movies/top_rated_alltime?limit=50`),
+            // Request a larger pool for top-rated so client-side filtering still leaves ~20 visible items
+            fetch(`/movies/top_rated_alltime?limit=200`),
             fetch(`/shows/new_releases?days=60&limit=50`),
-            fetch(`/shows/top_rated_alltime?limit=50`),
-            fetch(`/recommend/guest/${getGuestId()}`),
+            fetch(`/shows/top_rated_alltime?limit=200`),
+            // Include user preferences (if any) from localStorage via header to improve guest recs
+            (function(){
+                const prefs = localStorage.getItem('nautilus_user_prefs');
+                const headers = prefs ? { 'X-User-Prefs': prefs } : {};
+                return fetch(`/recommend/guest/${getGuestId()}`, { headers });
+            })(),
             fetch(`/collections/ai`),
             fetch(`/movies/desi?limit=15`),
             fetch(`/movies/genre/16?limit=15`),
@@ -287,12 +312,13 @@ async function loadHome() {
         // 1. RecSys Row
         if(recs.length > 0) createRow('Picked for You (AI RecSys)', recs, 'movie');
 
-        // 2. New Releases & Top Rated rows using server-provided data (full rows)
-        if (moviesNew && moviesNew.length > 0) createRow('New Releases', moviesNew, 'movie');
-        if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
+    // 2. Top Rated above New Releases (server-provided data)
+    // Render Top Rated first so classics appear above recent releases
+    if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
+    if (moviesNew && moviesNew.length > 0) createRow('New Releases', moviesNew, 'movie');
 
-        if (showsNew && showsNew.length > 0) createRow('New Releases (Series)', showsNew, 'tv');
-        if (showsTop && showsTop.length > 0) createRow('Top Rated (Series)', showsTop, 'tv');
+    if (showsTop && showsTop.length > 0) createRow('Top Rated (Series)', showsTop, 'tv');
+    if (showsNew && showsNew.length > 0) createRow('New Releases (Series)', showsNew, 'tv');
         
         // 3. New Genre Rows
         if(desi.length > 0) createRow('Desi Hits', desi, 'movie');
@@ -329,7 +355,22 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
     scroller.className = 'row-scroller';
     if (hasRegen) scroller.id = 'random-scroller';
 
-    items.forEach(item => {
+    // Filter out obviously-empty or malformed items (no title/name or missing/invalid poster)
+    const filtered = items.filter(item => {
+        const hasTitle = !!(item && (item.title || item.name));
+        let poster = item && item.poster_path;
+        // Treat literal strings 'undefined'/'null' and empty as missing
+        const badPoster = poster === undefined || poster === null || String(poster).trim() === '' || String(poster).toLowerCase() === 'undefined' || String(poster).toLowerCase() === 'null';
+        const hasPoster = !badPoster;
+        return hasTitle && hasPoster;
+    });
+
+    if (filtered.length === 0) {
+        // Nothing valid to show in this row; skip rendering it
+        return;
+    }
+
+    filtered.forEach(item => {
         const card = document.createElement('div');
         card.className = 'card';
         
@@ -343,8 +384,8 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
         // Pass the determined type to openModal
         card.onclick = () => openModal(item, type);
         
-        const name = item.title || item.name;
-        const imgSrc = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450';
+    const name = item.title || item.name;
+    const imgSrc = item.poster_path && String(item.poster_path).toLowerCase() !== 'undefined' ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450';
         
         card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
         scroller.appendChild(card);
