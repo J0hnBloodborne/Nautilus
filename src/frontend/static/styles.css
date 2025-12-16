@@ -46,12 +46,42 @@ body {
     /* Paper Texture Pattern (Light Mode Default) */
     background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 20px);
     min-height: 100vh;
+    /* Layout: make footer sticky to bottom when content is short */
+    display: flex;
+    flex-direction: column;
     transition: background-color 0.3s, color 0.3s;
 }
 
 [data-theme="dark"] body {
     /* Dark Mode Texture - Dark Paper */
     background-image: repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 20px);
+}
+
+/* --- Footer --- */
+.site-footer {
+    background: linear-gradient(90deg, rgba(0,0,0,0.03), rgba(0,0,0,0.02));
+    border-top: 3px double var(--parchment-dark);
+    padding: 12px 2rem;
+    margin-top: 2rem;
+}
+.site-footer .footer-content {
+    max-width: 1600px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-pixel);
+    color: var(--ink);
+    font-size: 0.95rem;
+}
+.site-footer .footer-left { font-family: var(--font-header); font-size: 1.05rem; color: var(--gold); }
+.site-footer .footer-right { opacity: 0.95; font-style: italic; }
+
+@media (max-width: 600px) {
+    .site-footer { padding: 10px 1rem; }
+    .site-footer .footer-content { flex-direction: column; align-items: center; text-align: center; gap: 6px; }
+    .site-footer .footer-left, .site-footer .footer-right { font-size: 0.85rem; }
 }
 
 /* --- Header --- */
@@ -230,6 +260,7 @@ main {
     padding: 2rem;
     max-width: 1600px;
     margin: 0 auto;
+    flex: 1 1 auto; /* allow main to grow so footer stays at bottom on short pages */
 }
 
 /* Make room for the fixed header so content doesn't hide under it */
@@ -352,6 +383,53 @@ main { padding-top: 180px; }
     padding: 2.5rem;
     /* Paper texture effect */
     background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.15'/%3E%3C/svg%3E");
+}
+
+/* When the modal is showing the player, reduce chrome and expand the player area */
+.modal.player-open {
+    align-items: center;
+}
+.modal.player-open .modal-content {
+    width: 96%;
+    max-width: 1100px;
+    padding: 10px;
+    border-width: 4px;
+}
+.modal.player-open .modal-content .modal-header {
+    display: none !important;
+}
+.modal.player-open #player-wrapper {
+    border-width: 4px;
+    margin: 0;
+    width: 100%;
+    max-width: 100%;
+}
+.modal.player-open .close-btn { display: none !important; }
+
+/* Make source select and close/exit buttons smaller on narrow screens so they fit without overlap */
+#source-select {
+    font-size: 1rem;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+.modal.player-open #source-select {
+    font-size: 0.95rem;
+    padding: 4px 8px;
+}
+
+/* Reduce close button size on smaller viewports (when not in player-open state) so it doesn't crowd the UI */
+.close-btn {
+    transition: transform 0.15s, font-size 0.15s;
+}
+
+@media (max-width: 900px) {
+    #source-select { font-size: 0.95rem; padding: 4px 8px; }
+    .close-btn { font-size: 1.6rem; top: 10px; right: 12px; }
+}
+
+@media (max-width: 480px) {
+    #source-select { font-size: 0.85rem; padding: 3px 6px; }
+    .close-btn { font-size: 1.2rem; top: 8px; right: 10px; }
 }
 
 .close-btn {
@@ -545,6 +623,28 @@ main { padding-top: 180px; }
     border-bottom: 1px solid var(--gold);
 }
 
+/* Make the player responsive on narrow screens */
+@media (max-width: 900px) {
+    #player-wrapper {
+        aspect-ratio: auto; /* allow explicit height */
+        height: 44vw; /* scale with viewport width */
+        max-height: 320px;
+        border-width: 4px;
+        margin-bottom: 1.2rem;
+    }
+    .player-controls { padding: 6px; }
+}
+
+@media (max-width: 480px) {
+    #player-wrapper {
+        height: 52vw; /* slightly taller on very narrow screens */
+        max-height: 300px;
+        border-width: 3px;
+    }
+    .player-controls { padding: 4px; font-size: 0.95rem; }
+    #artplayer-app, #embed-frame { height: 100%; }
+}
+
 .controls-left {
     display: flex;
     align-items: center;
@@ -645,6 +745,8 @@ main { padding-top: 180px; }
 @media (max-width: 480px) {
     header { min-height: 110px; padding: 1rem 1rem; }
     .header-content { padding-top: 0.4rem; }
+    /* Reduce logo image size to avoid crowding on very small phones */
+    .galleon-icon { height: 36px; margin-right: 6px; }
 }
 
 /* Ensure main content is pushed below fixed header on narrow screens

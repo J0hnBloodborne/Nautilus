@@ -702,8 +702,11 @@ async function playVideo(type, tmdbId, season=1, episode=1) {
     
     // Hide Info, Show Player
     document.querySelector('.modal-header').classList.add('hidden');
-    document.querySelector('.close-btn').classList.add('hidden'); // Hide main close button
     document.getElementById('player-wrapper').classList.remove('hidden');
+
+    // Mark modal as player-open so CSS can expand the player area
+    const modal = document.getElementById('modal');
+    if (modal) modal.classList.add('player-open');
 
     loadSource('auto');
     if(btn) btn.innerText = "▶ PLAY";
@@ -806,6 +809,8 @@ function closePlayer() {
     // Show Info Again
     document.querySelector('.modal-header').classList.remove('hidden');
     document.querySelector('.close-btn').classList.remove('hidden'); // Show main close button
+    const modal = document.getElementById('modal');
+    if (modal) modal.classList.remove('player-open');
 }
 
 async function refreshRandom(btn) {

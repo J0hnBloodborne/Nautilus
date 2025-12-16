@@ -1,23 +1,13 @@
 --extra-index-url https://pypi.nvidia.com
-
-# --- Core app & ML deps (same as requirements.txt, unpinned) ---
 fastapi
 uvicorn
-starlette
 Jinja2
-jinja2-humanize-extension
-
 SQLAlchemy
 psycopg2-binary
 alembic
-
 python-dotenv
 pydantic
-pydantic-settings
-pydantic-extra-types
-pydantic_core
 passlib
-
 numpy
 pandas
 scikit-learn
@@ -27,42 +17,19 @@ tensorflow[and-cuda]
 joblib
 matplotlib
 seaborn
-
 requests
 httpx
-anyio
-idna
-certifi
-charset-normalizer
-urllib3
-
 rich
 python-json-logger
-
 pytest
 ruff
+python-multipart
+deepchecks
 
-# --- RAPIDS / cuDF / cuML / friends ---
-cudf-cu12
-cugraph-cu12
-cuml-cu12
-dask-cudf-cu12
-dask-cuda
-distributed-ucxx-cu12
-pylibcudf-cu12
-pylibcugraph-cu12
-pylibraft-cu12
-rmm-cu12
-raft-dask-cu12
-rapids-dask-dependency
-
-# --- Low-level CUDA bindings (optional) ---
-cuda-python
-cuda-bindings
-cuda-core
-cuda-pathfinder
-cuda-toolkit
-
-# --- NVidia extras (optional) ---
-nvidia-ml-py
-nvtx
+# Example RAPIDS / cuDF / cuML installation command (adjust versions to your CUDA):
+# pip install \
+#   --extra-index-url=https://pypi.nvidia.com \
+#   "cudf-cu13==25.12.*" "dask-cudf-cu13==25.12.*" "cuml-cu13==25.12.*" \
+#   "cugraph-cu13==25.12.*" "nx-cugraph-cu13==25.12.*" "cuxfilter-cu13==25.12.*" \
+#   "cucim-cu13==25.12.*" "pylibraft-cu13==25.12.*" "raft-dask-cu13==25.12.*" \
+#   "cuvs-cu13==25.12.*" "nx-cugraph-cu13==25.12.*"

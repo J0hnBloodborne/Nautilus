@@ -728,7 +728,8 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
                 'vote_count': int(row.vote_count),
                 'poster_path': m.poster_path if m else None,
                 'release_date': m.release_date if m else None,
-                'popularity_score': m.popularity_score if m else None
+                'popularity_score': m.popularity_score if m else None,
+                'overview': m.overview if m else None
             }
             out.append(data)
         return out
@@ -765,7 +766,8 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
                         'vote_count': int(cnt) if cnt is not None else None,
                         'poster_path': m.poster_path if m else None,
                         'release_date': m.release_date if m else None,
-                        'popularity_score': m.popularity_score if m else None
+                        'popularity_score': m.popularity_score if m else None,
+                        'overview': m.overview if m else None
                     }
                     cached_out.append(rec)
                 if cached_out:
@@ -840,14 +842,14 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
     for tmdb, avg, cnt in avg_list[:limit]:
         m = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb).first()
         if m:
-            out.append({'title': m.title, 'tmdb_id': tmdb, 'avg_rating': float(avg), 'vote_count': int(cnt), 'poster_path': m.poster_path, 'release_date': m.release_date, 'popularity_score': m.popularity_score})
+            out.append({'title': m.title, 'tmdb_id': tmdb, 'avg_rating': float(avg), 'vote_count': int(cnt), 'poster_path': m.poster_path, 'release_date': m.release_date, 'popularity_score': m.popularity_score, 'overview': m.overview})
 
     if out:
         return out
 
     # Final fallback: popularity
     movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit).all()
-    return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'poster_path': m.poster_path, 'release_date': m.release_date } for m in movies]
+    return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'poster_path': m.poster_path, 'release_date': m.release_date, 'overview': m.overview } for m in movies]
 
 
 
