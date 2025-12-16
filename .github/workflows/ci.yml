@@ -1,5 +1,10 @@
 name: Nautilus CI
 
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
 on:
   push:
     branches: [ "main" ]
@@ -64,10 +69,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3  
-      - name: Build Docker Image
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
         run: |
-            docker build -t nautilus-app:${{ github.sha }} .
-            echo "Docker Image Built Successfully"
+          IMAGE=ghcr.io/${{ github.repository_owner }}/nautilus-app:${{ github.sha }}
+          docker build -t "$IMAGE" .
+          docker tag "$IMAGE" ghcr.io/${{ github.repository_owner }}/nautilus-app:latest
+          echo "Docker Image Built: $IMAGE"
+
+      - name: Push Docker image to GHCR
+        run: |
+          IMAGE=ghcr.io/${{ github.repository_owner }}/nautilus-app:${{ github.sha }}
+          docker push "$IMAGE"
+          docker push ghcr.io/${{ github.repository_owner }}/nautilus-app:latest
+          echo "Docker image pushed to ghcr.io"
       - name: Notify Discord (optional)
         if: ${{ always() }}
         env:

@@ -9,14 +9,26 @@ def main():
     models.Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        existing = db.query(models.Movie).filter_by(tmdb_id=999999).first()
-        if not existing:
-            m = models.Movie(title='CI Test Movie', tmdb_id=999999, overview='CI seed', popularity_score=1.0)
-            db.add(m)
+        # Ensure a small, diverse seed dataset so DeepChecks has multiple values to validate
+        seeds = [
+            {'tmdb_id': 999997, 'title': 'CI Seed A', 'overview': 'Seed A', 'popularity_score': 1.0},
+            {'tmdb_id': 999998, 'title': 'CI Seed B', 'overview': 'Seed B', 'popularity_score': 5.0},
+            {'tmdb_id': 999999, 'title': 'CI Seed C', 'overview': 'Seed C', 'popularity_score': 10.0},
+        ]
+
+        added = 0
+        for s in seeds:
+            exists = db.query(models.Movie).filter_by(tmdb_id=s['tmdb_id']).first()
+            if not exists:
+                m = models.Movie(title=s['title'], tmdb_id=s['tmdb_id'], overview=s['overview'], popularity_score=s['popularity_score'])
+                db.add(m)
+                added += 1
+
+        if added > 0:
             db.commit()
-            print('Seeded test Movie.')
+            print(f'Seeded {added} test Movie(s).')
         else:
-            print('Seed already present.')
+            print('Seeds already present.')
     finally:
         db.close()
 
