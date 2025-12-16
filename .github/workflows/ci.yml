@@ -124,20 +124,18 @@ jobs:
           content="DeepChecks run for ${repo} finished with status: ${status}. See: ${run_url}"
           echo "Discord notify: $content"
           export DISCORD_CONTENT="$content"
-          python - <<'PY'
-            import os, json, urllib.request
-            webhook = os.environ.get('DISCORD_WEBHOOK')
-            content = os.environ.get('DISCORD_CONTENT')
-            if not webhook:
-              print('No DISCORD_WEBHOOK set; skipping notification.')
-              raise SystemExit(0)
-            if not content:
-              content = 'DeepChecks completed; no additional message.'
-            data = json.dumps({"content": content}).encode()
-            req = urllib.request.Request(webhook, data=data, headers={'Content-Type': 'application/json'})
-            try:
-              resp = urllib.request.urlopen(req)
-              print('Notification sent, response code:', resp.getcode())
-            except Exception as e:
-              print('Failed to send Discord notification:', e)
-            PY
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo 'No DISCORD_WEBHOOK set; skipping notification.'
+            exit 0
+          fi
+          # Build JSON payload safely, prefer jq if available
+          if command -v jq >/dev/null 2>&1; then
+            payload=$(jq -nc --arg c "$content" '{"content":$c}')
+          else
+            # Escape backslashes and double quotes for JSON
+            esc_content=$(printf '%s' "$content" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\"/g')
+            payload="{\"content\":\"$esc_content\"}"
+          fi
+          # Send to Discord
+          curl -s -X POST "$DISCORD_WEBHOOK" -H "Content-Type: application/json" -d "$payload" \
+            && echo "Notification sent" || echo "Failed to send Discord notification"

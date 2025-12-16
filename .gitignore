@@ -29,3 +29,4 @@ src/models/
 # Data (real/raw)
 data/raw/
 data/processed/
+*.sh
