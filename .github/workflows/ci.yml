@@ -78,16 +78,21 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE=ghcr.io/${{ github.repository_owner }}/nautilus-app:${{ github.sha }}
+          # Docker/OCI image names must be lowercase. Ensure owner is lowercased before tagging.
+          OWNER="${{ github.repository_owner }}"
+          OWNER_LOWER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE=ghcr.io/${OWNER_LOWER}/nautilus-app:${{ github.sha }}
           docker build -t "$IMAGE" .
-          docker tag "$IMAGE" ghcr.io/${{ github.repository_owner }}/nautilus-app:latest
+          docker tag "$IMAGE" ghcr.io/${OWNER_LOWER}/nautilus-app:latest
           echo "Docker Image Built: $IMAGE"
 
       - name: Push Docker image to GHCR
         run: |
-          IMAGE=ghcr.io/${{ github.repository_owner }}/nautilus-app:${{ github.sha }}
+          OWNER="${{ github.repository_owner }}"
+          OWNER_LOWER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE=ghcr.io/${OWNER_LOWER}/nautilus-app:${{ github.sha }}
           docker push "$IMAGE"
-          docker push ghcr.io/${{ github.repository_owner }}/nautilus-app:latest
+          docker push ghcr.io/${OWNER_LOWER}/nautilus-app:latest
           echo "Docker image pushed to ghcr.io"
       - name: Notify Discord (optional)
         if: ${{ always() }}
