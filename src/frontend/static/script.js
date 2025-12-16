@@ -259,19 +259,23 @@ async function loadHome() {
     container.innerHTML = '<div style="padding:40px; text-align:center;">Initializing...</div>';
     
     try {
-        // Parallel Fetch: Movies, Shows, Recs, Clusters, Desi, Animated, Random
-        const [resMovies, resShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
-            fetch(`/movies?limit=15`),
-            fetch(`/shows?limit=15`),
+        // Parallel Fetch: New Releases & Top Rated (movies & shows), Recs, Clusters, Desi, Animated, Random
+        const [resNewMovies, resTopMovies, resNewShows, resTopShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
+            fetch(`/movies/new_releases?days=60&limit=50`),
+            fetch(`/movies/top_rated_alltime?limit=50`),
+            fetch(`/shows/new_releases?days=60&limit=50`),
+            fetch(`/shows/top_rated_alltime?limit=50`),
             fetch(`/recommend/guest/${getGuestId()}`),
             fetch(`/collections/ai`),
             fetch(`/movies/desi?limit=15`),
             fetch(`/movies/genre/16?limit=15`),
             fetch(`/movies/random?limit=15`)
         ]);
-        
-        const movies = await resMovies.json();
-        const shows = await resShows.json();
+
+        const moviesNew = await resNewMovies.json();
+        const moviesTop = await resTopMovies.json();
+        const showsNew = await resNewShows.json();
+        const showsTop = await resTopShows.json();
         const recs = await resRecs.json();
         const clusters = await resClusters.json();
         const desi = await resDesi.json();
@@ -282,10 +286,13 @@ async function loadHome() {
         
         // 1. RecSys Row
         if(recs.length > 0) createRow('Picked for You (AI RecSys)', recs, 'movie');
-        
-        // 2. Standard Rows
-        createRow('Popular Movies', movies, 'movie');
-        createRow('Popular Series', shows, 'tv');
+
+        // 2. New Releases & Top Rated rows using server-provided data (full rows)
+        if (moviesNew && moviesNew.length > 0) createRow('New Releases', moviesNew, 'movie');
+        if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
+
+        if (showsNew && showsNew.length > 0) createRow('New Releases (Series)', showsNew, 'tv');
+        if (showsTop && showsTop.length > 0) createRow('Top Rated (Series)', showsTop, 'tv');
         
         // 3. New Genre Rows
         if(desi.length > 0) createRow('Desi Hits', desi, 'movie');

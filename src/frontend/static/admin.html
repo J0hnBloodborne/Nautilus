@@ -132,6 +132,27 @@
         </div>
     </div>
 
+    <h2>Catalog Snapshot</h2>
+    <p>Quick view: New Releases and Top Rated (Movies & Shows)</p>
+    <div class="charts-container" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        <div class="chart-box" style="align-items:flex-start;">
+            <h3 style="margin-bottom:8px;">New Releases (Movies)</h3>
+            <ul id="new-releases-movies" style="list-style:none; padding-left:0; width:100%;"></ul>
+        </div>
+        <div class="chart-box" style="align-items:flex-start;">
+            <h3 style="margin-bottom:8px;">Top Rated (Movies)</h3>
+            <ul id="top-rated-movies" style="list-style:none; padding-left:0; width:100%;"></ul>
+        </div>
+        <div class="chart-box" style="align-items:flex-start;">
+            <h3 style="margin-bottom:8px;">New Releases (Shows)</h3>
+            <ul id="new-releases-shows" style="list-style:none; padding-left:0; width:100%;"></ul>
+        </div>
+        <div class="chart-box" style="align-items:flex-start;">
+            <h3 style="margin-bottom:8px;">Top Rated (Shows)</h3>
+            <ul id="top-rated-shows" style="list-style:none; padding-left:0; width:100%;"></ul>
+        </div>
+    </div>
+
     <h2>Model Registry (Experimentation Log)</h2>
     <p>Performance metrics for currently deployed machine learning models. Select two models of the same type to compare.</p>
     
@@ -284,6 +305,26 @@
                 document.getElementById('count-movies').textContent = data.movies;
                 document.getElementById('count-shows').textContent = data.shows;
                 document.getElementById('model-count').textContent = data.models.filter(m => m.is_active).length;
+                // Populate catalog snapshot lists
+                function populateList(id, items, formatter) {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.innerHTML = '';
+                    if (!items || items.length === 0) {
+                        el.innerHTML = '<li style="color:#666">No data</li>';
+                        return;
+                    }
+                    items.forEach(it => {
+                        const text = formatter ? formatter(it) : (it.title || '—');
+                        const li = `<li style="padding:6px 0; border-bottom:1px solid rgba(0,0,0,0.04);">${text}</li>`;
+                        el.innerHTML += li;
+                    });
+                }
+
+                populateList('new-releases-movies', data.new_releases_movies, i => `${i.title} <span style="color:#888; font-size:0.85em;">${i.release_date || ''}</span>`);
+                populateList('top-rated-movies', data.top_rated_movies, i => i.avg_rating ? `${i.title} — ${i.avg_rating.toFixed(2)}★` : `${i.title} — pop:${(i.popularity||0).toFixed(2)}`);
+                populateList('new-releases-shows', data.new_releases_shows, i => `${i.title} <span style="color:#888; font-size:0.85em;">${i.release_date || ''}</span>`);
+                populateList('top-rated-shows', data.top_rated_shows, i => i.avg_rating ? `${i.title} — ${i.avg_rating.toFixed(2)}★` : `${i.title} — pop:${(i.popularity||0).toFixed(2)}`);
                 
                 const tbody = document.querySelector('#model-table tbody');
                 tbody.innerHTML = '';
@@ -299,7 +340,7 @@
 
                     const row = `
                         <tr>
-                            <td><input type="checkbox" class="model-select" data-model='${JSON.stringify(m)}'></td>
+                            <td><input type="checkbox" class="model-select" data-model='${encodeURIComponent(JSON.stringify(m))}'></td>
                             <td style="font-weight:bold; color: #2F1B25;">${m.name} <span style="font-weight:normal; color:#666; font-size:0.8em;">(v${m.version})</span></td>
                             <td>${m.model_type}</td>
                             <td style="font-family:monospace; font-size:0.9em; color:#2F1B25;">${metricStr}</td>
@@ -323,8 +364,8 @@
                         return;
                     }
 
-                    const m1 = JSON.parse(checkboxes[0].dataset.model);
-                    const m2 = JSON.parse(checkboxes[1].dataset.model);
+                    const m1 = JSON.parse(decodeURIComponent(checkboxes[0].dataset.model));
+                    const m2 = JSON.parse(decodeURIComponent(checkboxes[1].dataset.model));
 
                     if (m1.model_type !== m2.model_type) {
                         errorSpan.textContent = `Cannot compare ${m1.model_type} with ${m2.model_type}.`;

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Request, UploadFile, File
+from fastapi import FastAPI, Depends, Request, UploadFile, File, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session, joinedload
@@ -16,6 +16,10 @@ import glob
 import ctypes
 import sys
 from datetime import datetime
+from datetime import timedelta
+import threading
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 from tensorflow import keras as _keras
 from fastapi.encoders import jsonable_encoder
@@ -107,13 +111,176 @@ def get_admin_stats(db: Session = Depends(get_db)):
     
     # Fetch all models to plot performance history
     models_list = db.query(models.MLModel).order_by(models.MLModel.created_at.desc()).all()
-    
+
+    # Leaderboard: top movies by popularity_score (top 5)
+    top_movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(5).all()
+    leaderboard = [{"title": m.title, "tmdb_id": m.tmdb_id, "popularity": m.popularity_score} for m in top_movies]
+
+    # New Releases (by release_date descending) - movies
+    try:
+        new_releases_movies = db.query(models.Movie).order_by(models.Movie.release_date.desc()).limit(5).all()
+        new_releases_movies = [{"title": m.title, "tmdb_id": m.tmdb_id, "release_date": m.release_date} for m in new_releases_movies]
+    except Exception:
+        new_releases_movies = []
+
+    # Top Rated Movies (by average rating if available, otherwise fallback to popularity)
+    try:
+        avg_ratings = db.query(
+            models.Movie.id,
+            models.Movie.title,
+            models.Movie.tmdb_id,
+            func.avg(models.Interaction.rating_value).label('avg_rating')
+        ).join(models.Interaction, models.Interaction.movie_id == models.Movie.id).group_by(models.Movie.id).order_by(func.avg(models.Interaction.rating_value).desc()).limit(5).all()
+
+        if avg_ratings:
+            top_rated_movies = [{"title": row.title, "tmdb_id": row.tmdb_id, "avg_rating": float(row.avg_rating)} for row in avg_ratings]
+        else:
+            # Fallback to popularity
+            top_pop = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(5).all()
+            top_rated_movies = [{"title": m.title, "tmdb_id": m.tmdb_id, "popularity": m.popularity_score} for m in top_pop]
+    except Exception:
+        top_rated_movies = []
+
+    # Repeat for TV Shows
+    try:
+        # TVShow doesn't have a release_date field in the model; use popularity as a proxy for recent/interesting
+        new_releases_shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(5).all()
+        new_releases_shows = [{"title": s.title, "tmdb_id": s.tmdb_id, "popularity": s.popularity_score} for s in new_releases_shows]
+    except Exception:
+        new_releases_shows = []
+
+    try:
+        avg_ratings_shows = db.query(
+            models.TVShow.id,
+            models.TVShow.title,
+            models.TVShow.tmdb_id,
+            func.avg(models.Interaction.rating_value).label('avg_rating')
+        ).join(models.Interaction, models.Interaction.tv_show_id == models.TVShow.id).group_by(models.TVShow.id).order_by(func.avg(models.Interaction.rating_value).desc()).limit(5).all()
+
+        if avg_ratings_shows:
+            top_rated_shows = [{"title": row.title, "tmdb_id": row.tmdb_id, "avg_rating": float(row.avg_rating)} for row in avg_ratings_shows]
+        else:
+            top_pop_shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(5).all()
+            top_rated_shows = [{"title": s.title, "tmdb_id": s.tmdb_id, "popularity": s.popularity_score} for s in top_pop_shows]
+    except Exception:
+        top_rated_shows = []
+
     return {
         "users": user_count,
         "movies": movie_count,
         "shows": show_count,
-        "models": models_list
+        "models": models_list,
+        "leaderboard": leaderboard,
+        "new_releases_movies": new_releases_movies,
+        "top_rated_movies": top_rated_movies,
+        "new_releases_shows": new_releases_shows,
+        "top_rated_shows": top_rated_shows
     }
+
+# --- Periodic ingestion helper (simple file-backed last-fetch marker)
+LAST_FETCH_PATH = Path("reports") / "last_fetch.json"
+
+def _read_last_fetch():
+    try:
+        if LAST_FETCH_PATH.exists():
+            data = json.loads(LAST_FETCH_PATH.read_text())
+            return data
+    except Exception as e:
+        print(f"read_last_fetch error: {e}")
+    return {}
+
+def _write_last_fetch(dct: dict):
+    try:
+        LAST_FETCH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LAST_FETCH_PATH.write_text(json.dumps(dct))
+    except Exception as e:
+        print(f"write_last_fetch error: {e}")
+
+def should_refetch(kind: str):
+    data = _read_last_fetch()
+    key = f"last_fetch_{kind}"
+    if key not in data:
+        return True
+    try:
+        last = datetime.fromisoformat(data[key])
+        return (datetime.utcnow() - last) >= timedelta(days=2)
+    except Exception:
+        return True
+
+def mark_fetched(kind: str):
+    data = _read_last_fetch()
+    data[f"last_fetch_{kind}"] = datetime.utcnow().isoformat()
+    _write_last_fetch(data)
+
+def run_fetch(kind: str = 'movies', pages: int = 2):
+    try:
+        print(f"Starting fetch job for: {kind}")
+        if kind in ('movies', 'all'):
+            from src.services.ingestion.ingest_movies import fetch_movies
+            fetch_movies(pages=pages)
+            mark_fetched('movies')
+        if kind in ('shows', 'all'):
+            from src.services.ingestion.ingest_shows import fetch_shows
+            fetch_shows(pages=pages)
+            mark_fetched('shows')
+        print(f"Fetch job for {kind} completed.")
+    except Exception as e:
+        print(f"run_fetch error ({kind}): {e}")
+
+def background_periodic_worker(interval_hours: int = 24):
+    try:
+        while True:
+            try:
+                # Movies
+                if should_refetch('movies'):
+                    print("Periodic worker: movies need refresh")
+                    run_fetch('movies', pages=2)
+                else:
+                    print("Periodic worker: movies up-to-date")
+
+                # Shows
+                if should_refetch('shows'):
+                    print("Periodic worker: shows need refresh")
+                    run_fetch('shows', pages=2)
+                else:
+                    print("Periodic worker: shows up-to-date")
+            except Exception as inner:
+                print(f"background_periodic_worker inner error: {inner}")
+
+            import time as _time
+            _time.sleep(interval_hours * 3600)
+    except Exception as e:
+        print(f"background_periodic_worker error: {e}")
+
+
+@app.on_event("startup")
+def startup_periodic_fetch():
+    # Start a daemon thread that periodically checks and fetches
+    try:
+        t = threading.Thread(target=background_periodic_worker, kwargs={'interval_hours': 24}, daemon=True)
+        t.start()
+    except Exception as e:
+        print(f"startup_periodic_fetch error: {e}")
+
+
+@app.post("/admin/refresh_movies")
+def refresh_movies(request: Request, background_tasks: BackgroundTasks, kind: str = 'movies', pages: int = 2):
+    """Manual trigger to refresh movies/shows ingestion. Protected by ADMIN_TRIGGER_TOKEN if set."""
+    # If ADMIN_TRIGGER_TOKEN is configured, require it in X-ADMIN-TOKEN header
+    token = os.getenv('ADMIN_TRIGGER_TOKEN')
+    if token:
+        header = request.headers.get('X-ADMIN-TOKEN')
+        if not header or header != token:
+            return {"ok": False, "reason": "forbidden"}
+
+    if not TMDB_API_KEY:
+        return {"ok": False, "reason": "No TMDB API key configured"}
+
+    if kind not in ('movies', 'shows', 'all'):
+        return {"ok": False, "reason": "invalid kind"}
+
+    background_tasks.add_task(run_fetch, kind, pages)
+    return {"ok": True, "scheduled": True, "kind": kind}
 
 def get_media_item(db, tmdb_id):
     # Helper to find item in either table
@@ -511,6 +678,140 @@ async def upload_avatar(file: UploadFile = File(...)):
 def get_movies(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).offset(skip).limit(limit).all()
 
+
+@app.get("/movies/new_releases")
+def api_movies_new_releases(days: int = 60, limit: int = 50, db: Session = Depends(get_db)):
+    """Return movies released within the last `days`. No hard cap on returned count except `limit`."""
+    from datetime import datetime as _dt
+    cutoff = (_dt.utcnow() - timedelta(days=days)).date()
+    # Fetch recent movies by release_date descending (strings expected 'YYYY-MM-DD')
+    candidates = db.query(models.Movie).filter(models.Movie.release_date.isnot(None)).order_by(models.Movie.release_date.desc()).limit(2000).all()
+    out = []
+    for m in candidates:
+        try:
+            rd = m.release_date
+            if not rd:
+                continue
+            d = _dt.fromisoformat(rd).date()
+            if d <= _dt.utcnow().date() and d >= cutoff:
+                out.append(m)
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+@app.get("/movies/top_rated_alltime")
+def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depends(get_db)):
+    """Return all-time top rated movies. Prefer DB Interaction averages; fallback to MovieLens raw ratings files if needed."""
+    # 1) Try DB interactions
+    q = db.query(
+        models.Movie.id,
+        models.Movie.title,
+        models.Movie.tmdb_id,
+        func.avg(models.Interaction.rating_value).label('avg_rating'),
+        func.count(models.Interaction.id).label('vote_count')
+    ).join(models.Interaction, models.Interaction.movie_id == models.Movie.id).group_by(models.Movie.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).limit(limit).all()
+
+    # If DB has a healthy number of rated movies, prefer that (site-specific ratings)
+    MIN_ACCEPTABLE_DB_RESULTS = 10
+    if q and len(q) >= MIN_ACCEPTABLE_DB_RESULTS:
+        # Return Movie objects joined with stats
+        out = []
+        for row in q:
+            m = db.query(models.Movie).filter(models.Movie.id == row.id).first()
+            data = {
+                'title': row.title,
+                'tmdb_id': row.tmdb_id,
+                'avg_rating': float(row.avg_rating),
+                'vote_count': int(row.vote_count),
+                'poster_path': m.poster_path if m else None,
+                'release_date': m.release_date if m else None,
+                'popularity_score': m.popularity_score if m else None
+            }
+            out.append(data)
+        return out
+
+    # If DB ratings are sparse (few movies), fall back to MovieLens historical ratings
+    # so we can surface all-time classics rather than site-specific popular items.
+
+    # 2) Fallback to MovieLens ratings files (streaming CSV) if present
+    import csv
+    import glob
+    links_paths = glob.glob('data/raw/**/links.csv', recursive=True)
+    ratings_paths = glob.glob('data/raw/**/ratings.csv', recursive=True)
+    if not links_paths or not ratings_paths:
+        # No fallback available, use popularity as last resort
+        movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit).all()
+        return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'movie': m } for m in movies]
+
+    links_path = links_paths[0]
+    ratings_path = ratings_paths[0]
+
+    # Build mapping ml_movieId -> tmdbId
+    ml_to_tmdb = {}
+    try:
+        with open(links_path, newline='', encoding='utf-8') as f:
+            r = csv.DictReader(f)
+            for row in r:
+                try:
+                    mlid = int(row.get('movieId') or row.get('movieId'))
+                    tmdb = row.get('tmdbId') or row.get('tmdbId')
+                    if mlid and tmdb:
+                        ml_to_tmdb[mlid] = int(tmdb)
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"links file read error: {e}")
+
+    # Aggregate ratings by ml movie id
+    sums = {}
+    counts = {}
+    try:
+        with open(ratings_path, newline='', encoding='utf-8') as f:
+            r = csv.DictReader(f)
+            for row in r:
+                try:
+                    mid = int(row.get('movieId'))
+                    rating = float(row.get('rating'))
+                except Exception:
+                    continue
+                counts[mid] = counts.get(mid, 0) + 1
+                sums[mid] = sums.get(mid, 0.0) + rating
+    except Exception as e:
+        print(f"ratings file read error: {e}")
+
+    # Compute averages and map to tmdb ids
+    avg_list = []
+    for mid, cnt in counts.items():
+        if cnt < min_votes:
+            continue
+        tmdb = ml_to_tmdb.get(mid)
+        if not tmdb:
+            continue
+        avg = sums[mid] / cnt
+        avg_list.append((tmdb, avg, cnt))
+
+    # Sort by avg desc
+    avg_list.sort(key=lambda x: x[1], reverse=True)
+
+
+    out = []
+    for tmdb, avg, cnt in avg_list[:limit]:
+        m = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb).first()
+        if m:
+            out.append({'title': m.title, 'tmdb_id': tmdb, 'avg_rating': float(avg), 'vote_count': int(cnt), 'poster_path': m.poster_path, 'release_date': m.release_date, 'popularity_score': m.popularity_score})
+
+    if out:
+        return out
+
+    # Final fallback: popularity
+    movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit).all()
+    return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'poster_path': m.poster_path, 'release_date': m.release_date } for m in movies]
+
+
+
 @app.get("/shows")
 def get_shows(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     return db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).offset(skip).limit(limit).all()
@@ -550,6 +851,45 @@ def get_seasons(show_id: int, db: Session = Depends(get_db)):
         db.refresh(show)
         return sorted(show.seasons, key=lambda s: s.season_number)
     return []
+
+
+@app.get("/shows/new_releases")
+def api_shows_new_releases(days: int = 60, limit: int = 50, db: Session = Depends(get_db)):
+    """Return shows with episodes aired within the last `days`."""
+    from datetime import datetime as _dt
+    cutoff = (_dt.utcnow() - timedelta(days=days)).date().isoformat()
+    # Find show_ids that have episodes >= cutoff
+    try:
+        rows = db.query(models.Season.show_id).join(models.Episode, models.Episode.season_id == models.Season.id).filter(models.Episode.air_date >= cutoff).distinct().all()
+        show_ids = [r[0] for r in rows]
+        shows = db.query(models.TVShow).filter(models.TVShow.id.in_(show_ids)).all()
+        return shows[:limit]
+    except Exception as e:
+        print(f"api_shows_new_releases error: {e}")
+        return []
+
+
+@app.get("/shows/top_rated_alltime")
+def api_shows_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depends(get_db)):
+    """Top rated shows by user interactions (fallback to popularity)."""
+    q = db.query(
+        models.TVShow.id,
+        models.TVShow.title,
+        models.TVShow.tmdb_id,
+        func.avg(models.Interaction.rating_value).label('avg_rating'),
+        func.count(models.Interaction.id).label('vote_count')
+    ).join(models.Interaction, models.Interaction.tv_show_id == models.TVShow.id).group_by(models.TVShow.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).limit(limit).all()
+
+    if q and len(q) > 0:
+        out = []
+        for row in q:
+            s = db.query(models.TVShow).filter(models.TVShow.id == row.id).first()
+        out.append({'title': row.title, 'tmdb_id': row.tmdb_id, 'avg_rating': float(row.avg_rating), 'vote_count': int(row.vote_count), 'poster_path': s.poster_path if s else None, 'popularity_score': s.popularity_score if s else None})
+        return out
+
+    # Fallback: popularity
+    shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(limit).all()
+    return [{'title': s.title, 'tmdb_id': s.tmdb_id, 'popularity': s.popularity_score, 'poster_path': s.poster_path} for s in shows]
 
 _NCF_MODEL = None
 _NCF_ARTIFACTS = None
