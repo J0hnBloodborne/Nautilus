@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""Seed a minimal SQLite DB for CI validation runs.
-
-This script uses the repository's SQLAlchemy models and the DATABASE_URL
-environment variable (already set by the workflow). It creates tables and
-inserts a tiny Movie row so DeepChecks has something to validate.
-"""
 import sys
 
 from src.core import models

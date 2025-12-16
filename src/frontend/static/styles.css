@@ -33,6 +33,11 @@
     padding: 0;
 }
 
+/* Prevent any horizontal scrolling globally */
+html, body {
+    overflow-x: hidden;
+}
+
 body {
     background-color: var(--bg-wood);
     color: var(--ink);
@@ -53,10 +58,13 @@ body {
 header {
     background: var(--header-bg);
     border-bottom: 3px double var(--gold);
-    padding: 1rem 2rem;
-    position: sticky;
+    padding: 1.6rem 2rem; /* slightly more top padding so absolute controls don't overlap */
+    position: fixed;
     top: 0;
-    z-index: 100;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    min-height: 140px; /* ensure room for logo + controls */
     box-shadow: 0 4px 20px rgba(0,0,0,0.1); /* Softer shadow for light theme */
     transition: background-color 0.3s, box-shadow 0.3s;
 }
@@ -73,16 +81,18 @@ header {
     max-width: 1600px;
     margin: 0 auto;
     padding-bottom: 1rem;
+    padding-top: 0.8rem; /* give room for absolute top-controls */
     position: relative;
 }
 
 .top-controls {
     position: absolute;
-    top: 0;
-    right: 0;
+    top: 12px;
+    right: 16px;
     display: flex;
     gap: 15px;
     align-items: center;
+    z-index: 120; /* sit above header content */
 }
 
 .theme-toggle, .admin-link {
@@ -220,6 +230,17 @@ main {
     padding: 2rem;
     max-width: 1600px;
     margin: 0 auto;
+}
+
+/* Make room for the fixed header so content doesn't hide under it */
+main { padding-top: 180px; }
+
+@media (max-width: 768px) {
+    main { padding-top: 140px; }
+}
+
+@media (max-width: 480px) {
+    main { padding-top: 120px; }
 }
 
 /* Rows */
@@ -586,6 +607,105 @@ main {
         flex-direction: column;
         align-items: stretch;
     }
+}
+
+/* Additional mobile adjustments for homepage rows and cards */
+@media (max-width: 900px) {
+    /* Header/search */
+    .header-content { max-width: 100%; padding: 0 1rem; }
+    .search-container { width: 100%; }
+    .logo { font-size: 3.2rem; }
+
+    /* Row titles and scrollers */
+    .row-title { font-size: 1.8rem; }
+    .row-scroller { gap: 0.8rem; padding: 0.6rem 0; }
+    .row-arrow { display: none; } /* Hide desktop arrows on small screens */
+
+    /* Cards smaller on mobile */
+    .card { width: 130px; }
+    .poster-wrapper img, .poster { width: 100%; height: auto; }
+
+    /* Modal adjustments */
+    .modal-content { padding: 1rem; max-width: 95%; }
+
+    /* Charts: reduce canvas heights on narrow screens */
+    .chart-box { min-height: 220px; }
+    .chart-box canvas { height: 220px !important; }
+}
+
+@media (max-width: 480px) {
+    .logo { font-size: 2.4rem; }
+    .row-title { font-size: 1.4rem; }
+    .card { width: 110px; }
+    .poster { height: 160px; }
+    #search-input { font-size: 1rem; }
+    body { font-size: 16px; }
+}
+
+@media (max-width: 480px) {
+    header { min-height: 110px; padding: 1rem 1rem; }
+    .header-content { padding-top: 0.4rem; }
+}
+
+/* Ensure main content is pushed below fixed header on narrow screens
+   so the first row title is never hidden behind the header. */
+@media (max-width: 900px) {
+    main { padding-top: 10%; }
+}
+
+@media (max-width: 480px) {
+    main { padding-top: 160px; }
+}
+
+/* Mobile navigation styles */
+.mobile-menu-toggle {
+    display: none;
+    background: none;
+    border: 2px solid var(--ink);
+    color: var(--ink);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 1.2rem;
+}
+
+.mobile-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    background: var(--parchment);
+    border-top: 1px solid var(--parchment-dark);
+    z-index: 200;
+    padding: 10px 1rem;
+}
+
+.mobile-nav a, .mobile-nav button {
+    display: block;
+    padding: 10px 0;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+@media (max-width: 1200px) {
+    /* On narrow screens prefer compact icon-only top controls instead of a burger */
+    .mobile-menu-toggle { display: none; }
+    /* place controls a bit lower so they don't overlap the centered logo */
+    .top-controls { display: flex; gap: 8px; position: absolute; right: 12px; top: 18px; }
+    .top-controls .theme-toggle, .top-controls .admin-link { padding: 6px; border-radius: 8px; }
+    /* hide textual labels so controls are icon-only on mobile/tablet widths */
+    .top-controls .btn-text { display: none; }
+    /* ensure dark-mode text is hidden even if specificity/ordering interferes */
+    .top-controls .theme-toggle .btn-text { display: none !important; }
+    .top-controls .theme-toggle i, .top-controls .admin-link i { font-size: 1.1rem; }
+    .mobile-nav { display: none; }
+    /* give extra top spacing inside header-content to avoid overlap */
+    .header-content { padding-top: 1.4rem; }
+}
+
+@media (max-width: 360px) {
+    .top-controls { right: 4px; }
+    .top-controls .theme-toggle, .top-controls .admin-link { padding: 4px; }
 }
 
 .galleon-icon {

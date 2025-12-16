@@ -60,7 +60,7 @@ jobs:
     # NOTE: DeepChecks validation is run in a separate job below (deepchecks)
 
   package-delivery:
-    needs: deepchecks
+    needs: [build-and-test, deepchecks]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3  
@@ -68,6 +68,29 @@ jobs:
         run: |
             docker build -t nautilus-app:${{ github.sha }} .
             echo "Docker Image Built Successfully"
+      - name: Notify Discord (optional)
+        if: ${{ always() }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          # Report the build-and-test job result as the action status for image builds
+          status="${{ needs.build-and-test.result }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          repo="${{ github.repository }}"
+          content="Action run for ${repo} finished (image build step) with status: ${status}. See: ${run_url}"
+          echo "Discord notify: $content"
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo 'No DISCORD_WEBHOOK set; skipping notification.'
+            exit 0
+          fi
+          if command -v jq >/dev/null 2>&1; then
+            payload=$(jq -nc --arg c "$content" '{"content":$c}')
+          else
+            esc_content=$(printf '%s' "$content" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\"/g')
+            payload="{\"content\":\"$esc_content\"}"
+          fi
+          curl -s -X POST "$DISCORD_WEBHOOK" -H "Content-Type: application/json" -d "$payload" \
+            && echo "Notification sent" || echo "Failed to send Discord notification"
 
   deepchecks:
     name: deepchecks-validation
@@ -113,29 +136,4 @@ jobs:
           path: reports/
           retention-days: 7
 
-      - name: Notify Discord (optional)
-        if: ${{ always() }}
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
-          status="${{ steps.run_deepchecks.outcome }}"
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          repo="${{ github.repository }}"
-          content="DeepChecks run for ${repo} finished with status: ${status}. See: ${run_url}"
-          echo "Discord notify: $content"
-          export DISCORD_CONTENT="$content"
-          if [ -z "$DISCORD_WEBHOOK" ]; then
-            echo 'No DISCORD_WEBHOOK set; skipping notification.'
-            exit 0
-          fi
-          # Build JSON payload safely, prefer jq if available
-          if command -v jq >/dev/null 2>&1; then
-            payload=$(jq -nc --arg c "$content" '{"content":$c}')
-          else
-            # Escape backslashes and double quotes for JSON
-            esc_content=$(printf '%s' "$content" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\"/g')
-            payload="{\"content\":\"$esc_content\"}"
-          fi
-          # Send to Discord
-          curl -s -X POST "$DISCORD_WEBHOOK" -H "Content-Type: application/json" -d "$payload" \
-            && echo "Notification sent" || echo "Failed to send Discord notification"
+      

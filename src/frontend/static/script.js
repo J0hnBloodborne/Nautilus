@@ -34,6 +34,20 @@ const SoundManager = {
 // Initialize sounds on load
 document.addEventListener('DOMContentLoaded', () => SoundManager.init());
 
+// Mobile menu toggle handler
+document.addEventListener('DOMContentLoaded', () => {
+    const toggle = document.getElementById('mobile-menu-toggle');
+    const nav = document.getElementById('mobile-nav');
+    if (toggle && nav) {
+        toggle.addEventListener('click', (e) => {
+            const open = nav.getAttribute('aria-hidden') === 'false';
+            nav.setAttribute('aria-hidden', open ? 'true' : 'false');
+            nav.style.display = open ? 'none' : 'block';
+            toggle.innerHTML = open ? '<i class="fa-solid fa-bars"></i>' : '<i class="fa-solid fa-xmark"></i>';
+        });
+    }
+});
+
 // --- GUEST ID LOGIC ---
 function getGuestId() {
     let gid = localStorage.getItem('nautilus_guest_id');
@@ -123,9 +137,9 @@ function toggleTheme() {
     // Update Icon Text
     const btn = document.querySelector('.theme-toggle');
     if(next === 'dark') {
-        btn.innerHTML = '<i class="fa-solid fa-sun"></i> Light Mode';
+        btn.innerHTML = '<i class="fa-solid fa-sun"></i><span class="btn-text"> Light Mode</span>';
     } else {
-        btn.innerHTML = '<i class="fa-solid fa-moon"></i> Dark Mode';
+        btn.innerHTML = '<i class="fa-solid fa-moon"></i><span class="btn-text"> Dark Mode</span>';
     }
 }
 
@@ -135,15 +149,37 @@ document.body.setAttribute('data-theme', savedTheme);
 document.addEventListener('DOMContentLoaded', () => {
     const btn = document.querySelector('.theme-toggle');
     if(btn) {
-        if(savedTheme === 'dark') {
-            btn.innerHTML = '<i class="fa-solid fa-sun"></i> Light Mode';
-        } else {
-            btn.innerHTML = '<i class="fa-solid fa-moon"></i> Dark Mode';
-        }
+            if(savedTheme === 'dark') {
+                btn.innerHTML = '<i class="fa-solid fa-sun"></i><span class="btn-text"> Light Mode</span>';
+            } else {
+                btn.innerHTML = '<i class="fa-solid fa-moon"></i><span class="btn-text"> Dark Mode</span>';
+            }
     }
     
     // Show disclaimer modal on first visit
     showDisclaimerIfFirstTime();
+});
+
+// Adjust main padding dynamically so content isn't hidden under the fixed header
+function adjustMainPadding() {
+    try {
+        const header = document.querySelector('header');
+        const main = document.querySelector('main');
+        if (!header || !main) return;
+        const rect = header.getBoundingClientRect();
+        const extra = 20; // margin below header
+        main.style.paddingTop = `${Math.ceil(rect.height + extra)}px`;
+    } catch (e) { /* ignore */ }
+}
+
+// Run on load and resize
+document.addEventListener('DOMContentLoaded', () => {
+    adjustMainPadding();
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(adjustMainPadding, 120);
+    });
 });
 
 // --- DISCLAIMER POPUP (First Visit) ---
