@@ -12,7 +12,6 @@ This repository contains the pieces required by the course brief:
 - Data ingestion & preprocessing scripts (including a MovieLens aggregator used to precompute a top-rated cache for experiments).
 - Multiple ML artifacts and example workflows: recommendation models, classification/regression examples, clustering, dimensionality reduction examples, and time-series utilities used for experiments and admin analytics.
 
-NOTE: This README intentionally describes the ML and MLOps aspects of the project. It does not document or advertise any media playback or streaming functionality.
 
 Project layout
 --------------
@@ -78,7 +77,7 @@ This starts the FastAPI app with hot reload for development. The app exposes the
 
 Frontend / demo UI
 ------------------
-The demo UI is implemented as static assets under `src/frontend/static/`. It contains:
+The UI is implemented as static assets under `src/frontend/static/`. It contains:
 - `index.html` — homepage and discovery UI
 - `admin.html` — admin and analytics dashboard
 - `script.js`, `styles.css` — client-side logic and styling
@@ -164,7 +163,7 @@ Privacy / Data Notes
 
 Development notes and tips
 -------------------------
-- Frontend tweaks: `src/frontend/static/styles.css` and `script.js` contain the primary UI logic — use those for visual polish and responsive adjustments.
+- Frontend tweaks: `src/frontend/static/styles.css` and `script.js` contain the primary UI logic.
 - Admin/analytics: `src/frontend/static/admin.html` contains chart wiring and model summary views used during evaluation.
 - If you need to debug API routes, use the automatic docs provided by FastAPI at `/docs` when the server is running.
 
