@@ -859,38 +859,148 @@ def get_shows(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
 
 @app.get("/shows/{show_id}/seasons")
 def get_seasons(show_id: int, db: Session = Depends(get_db)):
+    """Return seasons with episodes.
+
+    Accepts either internal DB show id or a TMDB id. If the show exists in the DB
+    but seasons are not yet ingested, try to fetch them from TMDB and persist.
+    If the show is not present in the DB, fetch seasons/episodes directly from
+    TMDB and return them (no DB writes).
+    """
+    # Try DB lookup by internal id
     show = db.query(models.TVShow).options(
         joinedload(models.TVShow.seasons).joinedload(models.Season.episodes)
     ).filter(models.TVShow.id == show_id).first()
-    
+
+    # If not found, try TMDB id lookup
+    if not show:
+        try:
+            show = db.query(models.TVShow).options(
+                joinedload(models.TVShow.seasons).joinedload(models.Season.episodes)
+            ).filter(models.TVShow.tmdb_id == int(show_id)).first()
+        except Exception:
+            show = None
+
+    # If present in DB and has seasons, return them (sorted)
     if show and show.seasons:
         sorted_seasons = sorted(show.seasons, key=lambda s: s.season_number)
         for season in sorted_seasons:
             season.episodes.sort(key=lambda e: e.episode_number)
         return sorted_seasons
 
+    # If present in DB but no seasons ingested, fetch from TMDB and persist
     if show and TMDB_API_KEY:
-        url = f"https://api.themoviedb.org/3/tv/{show.tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
-        data = requests.get(url).json()
+        try:
+            url = f"{TMDB_BASE_URL}/tv/{show.tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                data = {}
+        except Exception:
+            data = {}
+
         for season_meta in data.get("seasons", []):
+            s_num = season_meta.get('season_number')
+            if s_num is None:
+                continue
             season = models.Season(
-                show_id=show.id, season_number=season_meta['season_number'],
-                name=season_meta['name'], air_date=season_meta['air_date']
+                show_id=show.id,
+                season_number=s_num,
+                name=season_meta.get('name'),
+                air_date=season_meta.get('air_date')
             )
             db.add(season)
-            db.commit()
-            s_url = f"https://api.themoviedb.org/3/tv/{show.tmdb_id}/season/{season.season_number}?api_key={TMDB_API_KEY}&language=en-US"
-            s_data = requests.get(s_url).json()
-            for ep in s_data.get("episodes", []):
-                episode = models.Episode(
-                    season_id=season.id, episode_number=ep['episode_number'],
-                    title=ep['name'], overview=ep['overview'],
-                    air_date=ep.get('air_date'), still_path=ep.get('still_path')
-                )
-                db.add(episode)
-            db.commit()
-        db.refresh(show)
-        return sorted(show.seasons, key=lambda s: s.season_number)
+            try:
+                db.commit()
+                db.refresh(season)
+            except Exception:
+                db.rollback()
+                continue
+
+            # Fetch episodes for this season
+            try:
+                s_url = f"{TMDB_BASE_URL}/tv/{show.tmdb_id}/season/{s_num}?api_key={TMDB_API_KEY}&language=en-US"
+                s_resp = requests.get(s_url, timeout=5)
+                if s_resp.status_code == 200:
+                    s_data = s_resp.json()
+                else:
+                    s_data = {}
+            except Exception:
+                s_data = {}
+
+            for ep in s_data.get('episodes', []):
+                try:
+                    episode = models.Episode(
+                        season_id=season.id,
+                        episode_number=ep.get('episode_number'),
+                        title=ep.get('name'),
+                        overview=ep.get('overview'),
+                        air_date=ep.get('air_date'),
+                        still_path=ep.get('still_path'),
+                        runtime_minutes=ep.get('runtime')
+                    )
+                    db.add(episode)
+                except Exception:
+                    continue
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        try:
+            db.refresh(show)
+        except Exception:
+            pass
+
+        if show.seasons:
+            return sorted(show.seasons, key=lambda s: s.season_number)
+
+    # If show not in DB, fetch directly from TMDB and return structured seasons (no DB writes)
+    if TMDB_API_KEY:
+        try:
+            tmdb_url = f"{TMDB_BASE_URL}/tv/{show_id}?api_key={TMDB_API_KEY}&language=en-US"
+            tmdb_resp = requests.get(tmdb_url, timeout=5)
+            if tmdb_resp.status_code != 200:
+                return []
+            tmdb_data = tmdb_resp.json()
+            seasons_out = []
+            for season_meta in tmdb_data.get('seasons', []):
+                s_num = season_meta.get('season_number')
+                if s_num is None:
+                    continue
+                season_entry = {
+                    'season_number': s_num,
+                    'name': season_meta.get('name'),
+                    'air_date': season_meta.get('air_date'),
+                    'episodes': []
+                }
+                try:
+                    s_url = f"{TMDB_BASE_URL}/tv/{show_id}/season/{s_num}?api_key={TMDB_API_KEY}&language=en-US"
+                    s_resp = requests.get(s_url, timeout=5)
+                    if s_resp.status_code == 200:
+                        s_data = s_resp.json()
+                    else:
+                        s_data = {}
+                except Exception:
+                    s_data = {}
+
+                for ep in s_data.get('episodes', []):
+                    season_entry['episodes'].append({
+                        'episode_number': ep.get('episode_number'),
+                        'title': ep.get('name'),
+                        'overview': ep.get('overview'),
+                        'air_date': ep.get('air_date'),
+                        'runtime_minutes': ep.get('runtime'),
+                        'still_path': ep.get('still_path')
+                    })
+
+                seasons_out.append(season_entry)
+
+            return seasons_out
+        except Exception:
+            return []
+
+    # No DB record path fell through; return empty
     return []
 
 
@@ -898,11 +1008,12 @@ def get_seasons(show_id: int, db: Session = Depends(get_db)):
 def api_shows_new_releases(days: int = 60, limit: int = 50, db: Session = Depends(get_db)):
     """Return shows with episodes aired within the last `days`."""
     from datetime import datetime as _dt
-    cutoff = (_dt.utcnow() - timedelta(days=days)).date().isoformat()
-    # Find show_ids that have episodes >= cutoff
     try:
+        cutoff = (_dt.utcnow() - timedelta(days=days)).date().isoformat()
         rows = db.query(models.Season.show_id).join(models.Episode, models.Episode.season_id == models.Season.id).filter(models.Episode.air_date >= cutoff).distinct().all()
         show_ids = [r[0] for r in rows]
+        if not show_ids:
+            return []
         shows = db.query(models.TVShow).filter(models.TVShow.id.in_(show_ids)).all()
         return shows[:limit]
     except Exception as e:
@@ -1235,6 +1346,75 @@ def fetch_tv_details(tmdb_id):
         'poster_path': data.get('poster_path'),
         'popularity_score': data.get('popularity')
     }
+
+
+@app.get("/media/{tmdb_id}")
+def get_media_details(tmdb_id: int, db: Session = Depends(get_db)):
+    """Return lightweight media details (overview, poster, release/first_air_date).
+
+    This is intended for non-blocking modal enrichment on the frontend. It will
+    try the DB first and fall back to TMDB (movie then tv) when an API key is
+    configured.
+    """
+    item, type_ = get_media_item(db, tmdb_id)
+    if item:
+        if type_ == 'movie':
+            return {
+                'tmdb_id': item.tmdb_id,
+                'media_type': 'movie',
+                'title': item.title,
+                'overview': item.overview,
+                'poster_path': item.poster_path,
+                'release_date': item.release_date
+            }
+        else:
+            # TV show
+            return {
+                'tmdb_id': item.tmdb_id,
+                'media_type': 'tv',
+                'title': item.title,
+                'overview': item.overview,
+                'poster_path': item.poster_path,
+                'first_air_date': getattr(item, 'first_air_date', None)
+            }
+
+    # Not in DB: try TMDB (movie first, then tv)
+    if not TMDB_API_KEY:
+        return {}
+
+    try:
+        m_url = f"{TMDB_BASE_URL}/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+        m_resp = requests.get(m_url, timeout=5)
+        if m_resp.status_code == 200:
+            md = m_resp.json()
+            return {
+                'tmdb_id': md.get('id'),
+                'media_type': 'movie',
+                'title': md.get('title'),
+                'overview': md.get('overview'),
+                'poster_path': md.get('poster_path'),
+                'release_date': md.get('release_date')
+            }
+    except Exception:
+        pass
+
+    try:
+        t_url = f"{TMDB_BASE_URL}/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+        t_resp = requests.get(t_url, timeout=5)
+        if t_resp.status_code == 200:
+            td = t_resp.json()
+            return {
+                'tmdb_id': td.get('id'),
+                'media_type': 'tv',
+                'title': td.get('name'),
+                'overview': td.get('overview'),
+                'poster_path': td.get('poster_path'),
+                'first_air_date': td.get('first_air_date')
+            }
+    except Exception:
+        pass
+
+    return {}
 
 @app.post("/interact")
 def record_interaction(input_data: InteractionInput, db: Session = Depends(get_db)):

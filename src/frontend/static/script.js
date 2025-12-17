@@ -612,8 +612,29 @@ function openModal(item, typeOverride=null) {
     } else {
         epSection.classList.remove('hidden');
         // For TV, show seasons/episodes list and hook clicks into playVideo
-        loadSeasons(item.id);
+        // Prefer tmdb_id when available (some rows come from ML cache with only tmdb_id)
+        const seasonTarget = item.tmdb_id || item.id;
+        loadSeasons(seasonTarget);
     }
+
+    // Lazy-fill missing overview/year without blocking modal open
+    (function(){
+        const tmdbId = item.tmdb_id || item.id;
+        if (!tmdbId) return;
+        const descEl = document.getElementById('m-desc');
+        const yearEl = document.getElementById('m-year');
+        const missingOverview = !(item.overview && item.overview.trim());
+        const missingYear = !(item.release_date || item.first_air_date);
+        if (!missingOverview && !missingYear) return;
+        // Fetch lightweight media details; don't block UI
+        fetch(`/media/${tmdbId}`).then(r => r.json()).then(d => {
+            try {
+                if (d && d.overview && missingOverview) descEl.textContent = d.overview;
+                const date = d.release_date || d.first_air_date || '';
+                if (date && missingYear) yearEl.textContent = date.split('-')[0];
+            } catch (e) { /* ignore */ }
+        }).catch(() => {});
+    })();
     
     modal.classList.add('active');
 }
