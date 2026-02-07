@@ -71,7 +71,6 @@ def run_association_rules():
         output_ml_ids = list(row['consequents'])
         
         # Convert input (antecedent) to TMDB ID (taking first item for simple lookup)
-        # In a real app we'd handle sets, but Key-Value lookup is faster for API
         for ml_id in input_ml_ids:
             tmdb_id = ml_to_tmdb.get(ml_id)
             if not tmdb_id:
