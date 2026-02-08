@@ -4,7 +4,7 @@ services:
   # 0. The Captain: Main API Application
   app:
     build: .
-    container_name: ai321_app
+    container_name: nautilus
     restart: always
     ports:
       - "8000:8000"
@@ -29,7 +29,7 @@ services:
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: ai321_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       # FIXED: Now pointing to the named volume defined at the bottom
       - postgres_data:/var/lib/postgresql/data

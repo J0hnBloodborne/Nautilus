@@ -9,13 +9,6 @@ pydantic
 passlib
 numpy
 pandas
-scikit-learn
-scipy
-xgboost
-tensorflow
-joblib
-matplotlib
-seaborn
 requests
 httpx
 rich
@@ -23,4 +16,3 @@ python-json-logger
 pytest
 ruff
 python-multipart
-deepchecks

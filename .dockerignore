@@ -1,0 +1,35 @@
+# Ignore virtual environments
+venv/
+env/
+.env
+krr/
+ai321/
+__pycache__/
+*.pyc
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore large data folders (mount these as volumes instead if needed)
+data/
+docker_volumes/
+models/
+src/models/*.pkl
+src/models/*.keras
+src/models/*.h5
+
+# Ignore IDE files
+.vscode/
+.idea/
+
+# Ignore node modules if present
+node_modules/
+
+# Ignore build artifacts
+dist/
+build/
+*.egg-info/
+
+# Ignore log files
+*.log

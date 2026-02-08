@@ -1,6 +1,12 @@
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+FROM python:3.10-slim
 
 WORKDIR /app
+
+# Install system dependencies for Postgres adapter (psycopg2)
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 

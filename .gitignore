@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 ai321/
+krr/
 .pytest_cache/
 docker_volumes/
 *.log

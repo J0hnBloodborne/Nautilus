@@ -2,9 +2,10 @@ import os
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Text, JSON, DateTime, Boolean, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
+from src.core.database import DATABASE_URL
 
 # DATABASE CONNECTION
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password123@localhost:5432/ai321_db")
+# DATABASE_URL imported from src.core.database to ensure consistency
 
 Base = declarative_base()
 
