@@ -308,15 +308,143 @@ async function runSearch() {
     }
 }
 
+// Helper: Fisher-Yates Shuffle
+function shuffle(array) {
+    if (!Array.isArray(array)) return [];
+    let currentIndex = array.length, randomIndex;
+    while (currentIndex != 0) {
+        randomIndex = Math.floor(Math.random() * currentIndex);
+        currentIndex--;
+        [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+    }
+    return array;
+}
+
+// --- NAVIGATION & SIDEBAR ---
+function setActiveNav(title) {
+    document.querySelectorAll('.nav-item').forEach(el => {
+        el.classList.remove('active');
+        if(el.getAttribute('title') === title) el.classList.add('active');
+    });
+}
+
+function focusSearch() {
+    const input = document.getElementById('search-input');
+    if(input) {
+        input.focus();
+        setActiveNav('Search');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+async function loadCollection(type, page=1) {
+    const container = document.getElementById('content-area');
+    container.innerHTML = '<div style="padding:40px; text-align:center;">Navigating Charts...</div>';
+    window.scrollTo(0,0);
+    
+    let title = '';
+    let endpoint = '';
+    const PAGE_SIZE = 100;
+    
+    if (type === 'watchlist') {
+         title = 'Watchlist';
+         endpoint = `/collections/watchlist/${getGuestId()}`;
+         setActiveNav('Watchlist');
+    } else if (type === 'movies') {
+        title = 'All Movies';
+        endpoint = `/movies?limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}`;
+        setActiveNav('Movies');
+    } else if (type === 'tv') {
+        title = 'All TV Shows';
+        endpoint = `/shows?limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}`;
+        setActiveNav('TV Shows');
+    }
+
+    try {
+        const res = await fetch(endpoint);
+        let items = await res.json();
+        
+        // Reverse watchlist to show newest first
+        if (type === 'watchlist' && Array.isArray(items)) items = items.reverse();
+
+        container.innerHTML = '';
+        if (Array.isArray(items) && items.length > 0) {
+            // Full Grid Layout for Collections
+            const wrapper = document.createElement('div');
+            wrapper.className = 'row-wrapper';
+            
+            // Helper: build pagination bar
+            function makePaginationBar() {
+                const bar = document.createElement('div');
+                bar.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin:1rem 0;";
+                const btnCss = "padding:8px 20px; border:2px solid var(--gold); background:rgba(0,0,0,0.3); color:var(--ink); cursor:pointer; font-family:var(--font-pixel); font-size:0.9rem; border-radius:4px;";
+                
+                const prev = document.createElement('button');
+                prev.innerText = "\u00AB Prev Page";
+                prev.style.cssText = btnCss;
+                prev.onclick = () => loadCollection(type, page - 1);
+                if (page <= 1) prev.style.visibility = 'hidden';
+
+                const label = document.createElement('span');
+                label.style.cssText = "font-family:var(--font-header); font-size:1.3rem; color:var(--ink);";
+                label.textContent = `Page ${page}`;
+
+                const next = document.createElement('button');
+                next.innerText = "Next Page \u00BB";
+                next.style.cssText = btnCss;
+                next.onclick = () => loadCollection(type, page + 1);
+                if (items.length < PAGE_SIZE) next.style.visibility = 'hidden';
+
+                bar.appendChild(prev);
+                bar.appendChild(label);
+                bar.appendChild(next);
+                return bar;
+            }
+
+            wrapper.innerHTML = `<div class="row-title">${title}</div>`;
+            wrapper.appendChild(makePaginationBar());
+            
+            const grid = document.createElement('div');
+            grid.style.cssText = "display:flex; flex-wrap:wrap; gap:20px; padding:20px 0; justify-content:center;";
+            
+            items.forEach(item => {
+                // Filter out items without posters or names
+                if (!item.poster_path || (!item.title && !item.name)) return;
+
+                const card = document.createElement('div');
+                card.className = 'card';
+                let mType = item.media_type;
+                if (!mType) mType = (type === 'tv') ? 'tv' : 'movie';
+                
+                card.onclick = () => openModal(item, mType);
+                const name = item.title || item.name;
+                const imgSrc = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
+                card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
+                grid.appendChild(card);
+            });
+            
+            wrapper.appendChild(grid);
+            wrapper.appendChild(makePaginationBar());
+
+            container.appendChild(wrapper);
+        } else {
+            container.innerHTML = `<div style="padding:50px; text-align:center; font-size:1.5rem; color:#888;">No charts found for ${title}. <button onclick="loadCollection('${type}', ${page-1})">Go Back</button></div>`;
+        }
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<div style="padding:40px; color:#f55">Navigation Error.</div>';
+    }
+}
+
 // --- HOME LOADING (Data-Driven) ---
 async function loadHome() {
+    setActiveNav('Home');
     const container = document.getElementById('content-area');
     container.innerHTML = '<div style="padding:40px; text-align:center;">Initializing...</div>';
     
     try {
         // Parallel fetch
-        const [resWatchlist, resTrending, resTopMovies, resNewMovies, resTopShows, resNewShows, resRecs, resCollections, resAnimated, resRandom] = await Promise.all([
-            fetch(`/collections/watchlist/${getGuestId()}`),
+        const [resTrending, resTopMovies, resNewMovies, resTopShows, resNewShows, resRecs, resCollections, resAnimated, resRandom] = await Promise.all([
             fetch(`/trending?days=7&limit=30`),
             fetch(`/movies/top_rated_alltime?limit=200`),
             fetch(`/movies/new_releases?days=90&limit=80`),
@@ -332,7 +460,6 @@ async function loadHome() {
             fetch(`/movies/random?limit=18`)
         ]);
 
-        const watchlist = await resWatchlist.json();
         const trending = await resTrending.json();
         const moviesTop = await resTopMovies.json();
         const moviesNew = await resNewMovies.json();
@@ -345,21 +472,18 @@ async function loadHome() {
         
         const trendingMovies = (trending && trending.movies) ? trending.movies : [];
         const trendingShows = (trending && trending.shows) ? trending.shows : [];
-        const curated1 = collections && collections.cluster_1 ? collections.cluster_1 : null;
-        const curated2 = collections && collections.cluster_2 ? collections.cluster_2 : null;
-        const curated3 = collections && collections.cluster_3 ? collections.cluster_3 : null;
+        const curated1 = collections && collections.cluster_1 ? shuffle(collections.cluster_1) : null;
+        const curated2 = collections && collections.cluster_2 ? shuffle(collections.cluster_2) : null;
+        const curated3 = collections && collections.cluster_3 ? shuffle(collections.cluster_3) : null;
 
         container.innerHTML = '';
-        
-        // 0. Watchlist
-        if(Array.isArray(watchlist) && watchlist.length > 0) createRow('Your Watchlist', watchlist, 'mixed');
 
-        // 1. RecSys Row
-        if(Array.isArray(recs) && recs.length > 0) createRow('For You', recs, 'movie');
+        // 1. RecSys Row (only if user has real interactions — endpoint returns {source:'none'} when no interactions)
+        if(Array.isArray(recs) && recs.length > 0) createRow('For You', recs, 'mixed');
 
         // 2. Trending
-        if(trendingMovies.length > 0) createRow('Trending Now (Movies)', trendingMovies, 'movie');
-        if(trendingShows.length > 0) createRow('Trending Now (Series)', trendingShows, 'tv');
+        if(trendingMovies.length > 0) createRow('Based on Your Interests (Movies)', trendingMovies, 'movie');
+        if(trendingShows.length > 0) createRow('Based on Your Interests (Series)', trendingShows, 'tv');
 
         // 3. Top Rated then New
         if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
@@ -373,10 +497,10 @@ async function loadHome() {
         if(curated1 && curated1.items && curated1.items.length > 0 && trendingMovies.length === 0) createRow(curated1.name || 'Trending Now', curated1.items, 'movie');
 
         // 5. Spotlight Genres
-        if(animated.length > 0) createRow('Animated Worlds', animated, 'movie');
+        if(animated.length > 0) createRow('Animated Worlds', shuffle(animated), 'movie');
 
         // 6. Random Row with Regen
-        if(random.length > 0) createRow('Random Picks', random, 'movie', true);
+        if(random.length > 0) createRow('Random Picks', shuffle(random), 'movie', true);
 
     } catch (err) {
         console.error(err);
@@ -422,8 +546,13 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
         // LOGIC FIX: If fixedType is passed (e.g. 'tv'), use it. 
         // Otherwise try to guess from item properties.
         let type = fixedType;
-        if (!type) {
-             type = (item.name || item.first_air_date) ? 'tv' : 'movie';
+        if (!type || type === 'mixed') {
+             // Check explicit media_type first (from recommend endpoint)
+             if (item.media_type === 'tv' || item.media_type === 'movie') {
+                 type = item.media_type;
+             } else {
+                 type = (item.name || item.first_air_date) ? 'tv' : 'movie';
+             }
         }
 
         // Pass the determined type to openModal
@@ -436,7 +565,7 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
         scroller.appendChild(card);
     });
 
-    // Arrows
+    // Arrows (scroll-aware visibility)
     const prevBtn = document.createElement('button');
     prevBtn.className = 'row-arrow prev';
     prevBtn.innerHTML = '&#8249;';
@@ -446,6 +575,20 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
     nextBtn.className = 'row-arrow next';
     nextBtn.innerHTML = '&#8250;';
     nextBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: 1000, behavior: 'smooth' }); };
+
+    // Hide arrows when at start/end of scroll
+    function updateArrowVisibility() {
+        const atStart = scroller.scrollLeft <= 5;
+        const atEnd = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 5;
+        prevBtn.style.opacity = atStart ? '0' : '1';
+        prevBtn.style.pointerEvents = atStart ? 'none' : 'auto';
+        nextBtn.style.opacity = atEnd ? '0' : '1';
+        nextBtn.style.pointerEvents = atEnd ? 'none' : 'auto';
+    }
+    scroller.addEventListener('scroll', updateArrowVisibility);
+    // Also check after images load
+    setTimeout(updateArrowVisibility, 100);
+    setTimeout(updateArrowVisibility, 500);
 
     section.appendChild(prevBtn);
     section.appendChild(nextBtn);
@@ -755,8 +898,25 @@ async function playVideo(type, tmdbId, season=1, episode=1) {
     const modal = document.getElementById('modal');
     if (modal) modal.classList.add('player-open');
 
-    loadSource('auto');
+    const defaultSource = localStorage.getItem('nautilus_default_source') || 'VidSrc.to';
+    loadSource(defaultSource);
+    // Sync dropdown to reflect the chosen source
+    const srcSel = document.getElementById('source-select');
+    if (srcSel) srcSel.value = defaultSource;
     if(btn) btn.innerText = "▶ PLAY";
+    
+    // Start progress tracking (saves every 3s)
+    startProgressTracking();
+    // Resume from saved progress
+    const saved = getStoredProgress(type, tmdbId);
+    if (saved && saved.time > 10) {
+        setTimeout(() => {
+            if (art && art.duration) {
+                art.currentTime = saved.time;
+                art.notice.show = `Resumed at ${formatTime(saved.time)}`;
+            }
+        }, 2500);
+    }
 }
 
 function changeSource(provider) { loadSource(provider); }
@@ -773,48 +933,24 @@ async function loadSource(provider) {
     select.options[select.selectedIndex].text = "Hunting...";
 
     try {
-        if (provider === 'nautilus') {
-            // Call MAIN FastAPI backend (relative path)
-            const scraperUrl = `/scrape?tmdbId=${currentTmdbId}&type=${currentType}&season=${currentSeason}&episode=${currentEpisode}`;
-            const res = await fetch(scraperUrl);
-            const data = await res.json();
-            
-            if (data.streamUrl) {
-                artContainer.style.display = 'block';
-                if (!art) initArtPlayer();
-                // Use the playlist URL directly (HLS)
-                art.switchUrl(data.streamUrl);
-                art.notice.show = 'Playing from Nautilus Scraper';
-            } else {
-                throw new Error("No stream found from scraper");
-            }
-        } else {
-            const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
-            const res = await fetch(apiUrl);
-            const data = await res.json();
+        const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
+        const res = await fetch(apiUrl);
+        const data = await res.json();
 
-            if (data.type === 'embed') {
-                iframe.classList.remove('hidden');
-                iframe.src = data.url;
-            } else {
-                artContainer.style.display = 'block';
-                if (!art) initArtPlayer();
-                const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
-                art.switchUrl(proxyUrl);
-            }
+        if (data.type === 'embed') {
+            iframe.classList.remove('hidden');
+            iframe.src = data.url;
+        } else {
+            artContainer.style.display = 'block';
+            if (!art) initArtPlayer();
+            const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
+            art.switchUrl(proxyUrl);
         }
         select.options[select.selectedIndex].text = prevLabel;
     } catch (e) {
         console.error(e);
         select.options[select.selectedIndex].text = "Failed";
         setTimeout(() => select.options[select.selectedIndex].text = prevLabel, 2000);
-        
-        // Fallback to Auto if Nautilus fails
-        if (provider === 'nautilus') {
-             alert("Nautilus scraper failed. Falling back to AutoEmbed.");
-             select.value = 'auto';
-             changeSource('auto');
-        }
     }
 }
 
@@ -974,4 +1110,175 @@ async function sendInteraction(action, tmdbId, type) {
     } catch (e) {
         console.error("Interaction failed", e);
     }
+}
+
+// --- RANDOM MOVIE (Header Button) ---
+async function playRandomMovie() {
+    try {
+        const res = await fetch('/movies/random?limit=1');
+        const items = await res.json();
+        if (items.length > 0 && items[0].poster_path) {
+            openModal(items[0], 'movie');
+        } else {
+            // Try again
+            const res2 = await fetch('/movies/random?limit=5');
+            const items2 = await res2.json();
+            const valid = items2.find(i => i.poster_path);
+            if (valid) openModal(valid, 'movie');
+        }
+    } catch(e) {
+        console.error('Random movie failed', e);
+    }
+}
+
+// --- KEYBOARD SHORTCUTS (Sudoflix-Inspired) ---
+document.addEventListener('keydown', (e) => {
+    // Don't trigger shortcuts when typing in search
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) return;
+    
+    const modal = document.getElementById('modal');
+    const playerWrapper = document.getElementById('player-wrapper');
+    const isPlayerOpen = modal && !modal.classList.contains('hidden') && playerWrapper && !playerWrapper.classList.contains('hidden');
+    
+    // Player-specific shortcuts (only when player is visible)
+    if (isPlayerOpen && art) {
+        switch(e.key) {
+            case ' ':
+            case 'k':
+            case 'K':
+                e.preventDefault();
+                art.playing ? art.pause() : art.play();
+                break;
+            case 'f':
+            case 'F':
+                e.preventDefault();
+                art.fullscreen = !art.fullscreen;
+                break;
+            case 'm':
+            case 'M':
+                e.preventDefault();
+                art.muted = !art.muted;
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                art.currentTime = Math.max(0, art.currentTime - 5);
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                art.currentTime = Math.min(art.duration, art.currentTime + 5);
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                art.volume = Math.min(1, art.volume + 0.1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                art.volume = Math.max(0, art.volume - 0.1);
+                break;
+            case 'j':
+            case 'J':
+                e.preventDefault();
+                art.currentTime = Math.max(0, art.currentTime - 10);
+                break;
+            case 'l':
+            case 'L':
+                e.preventDefault();
+                art.currentTime = Math.min(art.duration, art.currentTime + 10);
+                break;
+        }
+        return;
+    }
+    
+    // Global shortcuts
+    switch(e.key) {
+        case '/':
+            e.preventDefault();
+            document.getElementById('search-input').focus();
+            break;
+        case 'Escape':
+            if (modal && !modal.classList.contains('hidden')) {
+                closeModal();
+            }
+            break;
+    }
+});
+
+// --- WATCH PROGRESS PERSISTENCE (Sudoflix-Inspired) ---
+let progressSaveInterval = null;
+
+function startProgressTracking() {
+    if (progressSaveInterval) clearInterval(progressSaveInterval);
+    progressSaveInterval = setInterval(() => {
+        if (!art || !art.playing || !currentTmdbId) return;
+        const progress = {
+            time: art.currentTime,
+            duration: art.duration,
+            percentage: art.duration ? (art.currentTime / art.duration * 100) : 0,
+            updatedAt: Date.now()
+        };
+        const key = `nautilus_progress_${currentType}_${currentTmdbId}`;
+        if (currentType === 'tv') {
+            progress.season = currentSeason;
+            progress.episode = currentEpisode;
+        }
+        try { localStorage.setItem(key, JSON.stringify(progress)); } catch(e) {}
+    }, 3000); // Save every 3 seconds like sudoflix
+}
+
+function getStoredProgress(type, tmdbId) {
+    try {
+        const key = `nautilus_progress_${type}_${tmdbId}`;
+        const data = localStorage.getItem(key);
+        if (!data) return null;
+        const p = JSON.parse(data);
+        // Only resume if not near end (>95% = finished)
+        if (p.percentage && p.percentage > 95) return null;
+        return p;
+    } catch(e) { return null; }
+}
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// --- SETTINGS PANEL ---
+function openSettings() {
+    const overlay = document.getElementById('settings-overlay');
+    overlay.classList.remove('hidden');
+    // Populate current values
+    const defaultSrc = localStorage.getItem('nautilus_default_source') || 'VidSrc.to';
+    const sel = document.getElementById('settings-default-source');
+    if (sel) sel.value = defaultSrc;
+    const gidEl = document.getElementById('settings-guest-id');
+    if (gidEl) gidEl.textContent = getGuestId();
+    // Save on change
+    sel.onchange = () => {
+        localStorage.setItem('nautilus_default_source', sel.value);
+    };
+}
+
+function closeSettings() {
+    document.getElementById('settings-overlay').classList.add('hidden');
+}
+
+function clearWatchProgress() {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('nautilus_progress_')) keys.push(key);
+    }
+    keys.forEach(k => localStorage.removeItem(k));
+    alert(`Cleared ${keys.length} watch progress entries.`);
+}
+
+function resetPreferences() {
+    if (!confirm('This will clear all your likes, watchlist, and viewing preferences. Continue?')) return;
+    // Clear local prefs
+    localStorage.removeItem('nautilus_user_prefs');
+    // Clear server-side interactions
+    fetch(`/interactions/reset/${getGuestId()}`, { method: 'POST' }).catch(() => {});
+    alert('Preferences reset. Reload to see changes.');
+    location.reload();
 }

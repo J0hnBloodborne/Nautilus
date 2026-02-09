@@ -16,6 +16,7 @@ backup_pre_migration.sql
 /src/static/index_old.html
 /data/raw/
 /src/repair_genres.py
+/reference_repos/
 
 # Model artifacts
 *.pkl

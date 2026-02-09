@@ -271,6 +271,25 @@ def refresh_movies(request: Request, background_tasks: BackgroundTasks, kind: st
     background_tasks.add_task(run_fetch, kind, pages)
     return {"ok": True, "scheduled": True, "kind": kind}
 
+@app.post("/admin/train_model")
+def train_model(request: Request, background_tasks: BackgroundTasks):
+    """Trigger recommender model training in background."""
+    token = os.getenv('ADMIN_TRIGGER_TOKEN')
+    if token:
+        header = request.headers.get('X-ADMIN-TOKEN')
+        if not header or header != token:
+            return {"ok": False, "reason": "forbidden"}
+    
+    def _train():
+        try:
+            from src.ml.recommender_torch import train_recommender
+            train_recommender()
+        except Exception as e:
+            print(f"Training error: {e}")
+    
+    background_tasks.add_task(_train)
+    return {"ok": True, "message": "Training started in background. Check server logs for progress."}
+
 def get_media_item(db, tmdb_id):
     # Helper to find item in either table
     movie = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb_id).first()
@@ -475,7 +494,7 @@ def api_movies_new_releases(days: int = 60, limit: int = 50, db: Session = Depen
 
 
 @app.get("/movies/top_rated_alltime")
-def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depends(get_db)):
+def api_movies_top_rated(limit: int = 50, skip: int = 0, min_votes: int = 5, db: Session = Depends(get_db)):
     """Return all-time top rated movies. Prefer DB Interaction averages; fallback to MovieLens raw ratings files if needed."""
     # 1) Try DB interactions
     q = db.query(
@@ -484,7 +503,7 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
         models.Movie.tmdb_id,
         func.avg(models.Interaction.rating_value).label('avg_rating'),
         func.count(models.Interaction.id).label('vote_count')
-    ).join(models.Interaction, models.Interaction.movie_id == models.Movie.id).group_by(models.Movie.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).limit(limit).all()
+    ).join(models.Interaction, models.Interaction.movie_id == models.Movie.id).group_by(models.Movie.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).offset(skip).limit(limit).all()
 
     # If DB has a healthy number of rated movies, prefer that (site-specific ratings)
     MIN_ACCEPTABLE_DB_RESULTS = 10
@@ -515,7 +534,7 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
         if cache_path.exists():
             try:
                 payload = json.loads(cache_path.read_text(encoding='utf-8'))
-                items = payload.get('items', [])[:limit]
+                items = payload.get('items', [])[skip:skip+limit]
                 cached_out = []
                 for it in items:
                     tmdb = it.get('tmdb_id')
@@ -556,7 +575,7 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
     ratings_paths = glob.glob('data/raw/**/ratings.csv', recursive=True)
     if not links_paths or not ratings_paths:
         # No fallback available, use popularity as last resort
-        movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit).all()
+        movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).offset(skip).limit(limit).all()
         return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'movie': m } for m in movies]
 
     links_path = links_paths[0]
@@ -611,7 +630,7 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
 
 
     out = []
-    for tmdb, avg, cnt in avg_list[:limit]:
+    for tmdb, avg, cnt in avg_list[skip:skip+limit]:
         m = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb).first()
         if m:
             out.append({'title': m.title, 'tmdb_id': tmdb, 'avg_rating': float(avg), 'vote_count': int(cnt), 'poster_path': m.poster_path, 'release_date': m.release_date, 'popularity_score': m.popularity_score, 'overview': m.overview})
@@ -620,7 +639,7 @@ def api_movies_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depe
         return out
 
     # Final fallback: popularity
-    movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit).all()
+    movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).offset(skip).limit(limit).all()
     return [{ 'title': m.title, 'tmdb_id': m.tmdb_id, 'popularity': m.popularity_score, 'poster_path': m.poster_path, 'release_date': m.release_date, 'overview': m.overview } for m in movies]
 
 
@@ -794,7 +813,7 @@ def api_shows_new_releases(days: int = 60, limit: int = 50, db: Session = Depend
 
 
 @app.get("/shows/top_rated_alltime")
-def api_shows_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depends(get_db)):
+def api_shows_top_rated(limit: int = 50, skip: int = 0, min_votes: int = 5, db: Session = Depends(get_db)):
     """Top rated shows by user interactions (fallback to popularity)."""
     q = db.query(
         models.TVShow.id,
@@ -802,17 +821,17 @@ def api_shows_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depen
         models.TVShow.tmdb_id,
         func.avg(models.Interaction.rating_value).label('avg_rating'),
         func.count(models.Interaction.id).label('vote_count')
-    ).join(models.Interaction, models.Interaction.tv_show_id == models.TVShow.id).group_by(models.TVShow.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).limit(limit).all()
+    ).join(models.Interaction, models.Interaction.tv_show_id == models.TVShow.id).group_by(models.TVShow.id).having(func.count(models.Interaction.id) >= min_votes).order_by(func.avg(models.Interaction.rating_value).desc()).offset(skip).limit(limit).all()
 
     if q and len(q) > 0:
         out = []
         for row in q:
             s = db.query(models.TVShow).filter(models.TVShow.id == row.id).first()
-        out.append({'title': row.title, 'tmdb_id': row.tmdb_id, 'avg_rating': float(row.avg_rating), 'vote_count': int(row.vote_count), 'poster_path': s.poster_path if s else None, 'popularity_score': s.popularity_score if s else None})
+            out.append({'title': row.title, 'tmdb_id': row.tmdb_id, 'avg_rating': float(row.avg_rating), 'vote_count': int(row.vote_count), 'poster_path': s.poster_path if s else None, 'popularity_score': s.popularity_score if s else None})
         return out
 
     # Fallback: popularity
-    shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(limit).all()
+    shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).offset(skip).limit(limit).all()
     return [{'title': s.title, 'tmdb_id': s.tmdb_id, 'popularity': s.popularity_score, 'poster_path': s.poster_path} for s in shows]
 
 
@@ -1306,17 +1325,37 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
         return {"status": "recorded", "user_id": user.id}
     return {"status": "exists", "user_id": user.id}
 
+def _serialize_rec(item, media_type):
+    """Serialize a Movie or TVShow for the recommendation response."""
+    d = {
+        'id': item.id,
+        'tmdb_id': item.tmdb_id,
+        'poster_path': item.poster_path,
+        'overview': item.overview,
+        'genres': item.genres,
+        'popularity_score': item.popularity_score,
+        'media_type': media_type,
+    }
+    if media_type == 'tv':
+        d['name'] = item.title          # Frontend expects 'name' for TV shows
+    else:
+        d['title'] = item.title
+        d['release_date'] = getattr(item, 'release_date', None)
+    return d
+
+
 @app.get("/recommend/guest/{guest_id}")
 def get_guest_recommendations(guest_id: str, request: Request, db: Session = Depends(get_db)):
     """
     Hybrid Recommender for Guest Users.
-    1. Content-Based: Finds movies similar to what the user 'liked' OR 'watched'.
-    2. Fallback: Popular movies.
+    1. Content-Based: Finds movies AND shows similar to what the user 'liked' OR 'watched'.
+    2. Returns empty list when user has no interactions (hides row on frontend).
     """
     user = db.query(models.User).filter(models.User.username == guest_id).first()
     
     target_genres = set()
     liked_movie_ids = []
+    liked_tv_ids = []
 
     if user:
         # 1. Get Movie Interactions
@@ -1341,6 +1380,7 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
             models.Interaction.tv_show_id.isnot(None)
         ).all()
         tv_ids = [i.tv_show_id for i in tv_interactions]
+        liked_tv_ids = tv_ids
         if tv_ids:
             shows = db.query(models.TVShow).filter(models.TVShow.id.in_(tv_ids)).all()
             for s in shows:
@@ -1374,21 +1414,26 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
         min_pop_pref = None
 
     if not target_genres:
-        return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(12).all()
+        # No interactions at all — return empty so frontend hides the row
+        return []
 
-    # Find candidates that share at least one genre, excluding already liked
-    # Note: This is a simple heuristic. For production, use vector similarity.
-    # Allow client preference to raise popularity floor if provided
+    # Find movie candidates that share at least one genre, excluding already liked
     candidates_q = db.query(models.Movie).filter(models.Movie.id.notin_(liked_movie_ids), models.Movie.popularity_score.isnot(None)).order_by(models.Movie.popularity_score.desc())
     if min_pop_pref is not None:
         try:
             candidates_q = candidates_q.filter(models.Movie.popularity_score >= float(min_pop_pref))
         except Exception:
             pass
-    candidates = candidates_q.limit(500).all()
+    movie_candidates = candidates_q.limit(500).all()
+
+    # Also pull TV show candidates
+    show_candidates_q = db.query(models.TVShow).filter(models.TVShow.popularity_score.isnot(None)).order_by(models.TVShow.popularity_score.desc())
+    if liked_tv_ids:
+        show_candidates_q = show_candidates_q.filter(models.TVShow.id.notin_(liked_tv_ids))
+    show_candidates = show_candidates_q.limit(300).all()
 
     scored_candidates = []
-    for cand in candidates:
+    for cand in movie_candidates:
         score = 0
         cand_genres = []
         if cand.genres and isinstance(cand.genres, list):
@@ -1396,11 +1441,22 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
         elif cand.genres and isinstance(cand.genres, dict):
             cand_genres = list(cand.genres.keys())
             
-        # Jaccard Similarity for Genres
         intersection = len(set(cand_genres) & target_genres)
         if intersection > 0:
             score = intersection
-            scored_candidates.append((cand, score))
+            scored_candidates.append((cand, score, 'movie'))
+
+    # Score TV show candidates too
+    for cand in show_candidates:
+        cand_genres = []
+        if cand.genres and isinstance(cand.genres, list):
+            cand_genres = cand.genres
+        elif cand.genres and isinstance(cand.genres, dict):
+            cand_genres = list(cand.genres.keys())
+
+        intersection = len(set(cand_genres) & target_genres)
+        if intersection > 0:
+            scored_candidates.append((cand, intersection, 'tv'))
             
     # Sort by score
     scored_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -1428,8 +1484,8 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
             # If we found a similar user index and have candidate item idxs, run NCF inference
             if similar_user_idx is not None:
                 import numpy as _np
-                # Build candidate list filtered to those present in artifacts
-                candidate_item_ids = [int(c.id) for c in candidates if c.id in movie_id_to_idx]
+                # Build candidate list filtered to those present in artifacts (movies only for NCF)
+                candidate_item_ids = [int(c.id) for c in movie_candidates if c.id in movie_id_to_idx]
                 candidate_item_idxs = [movie_id_to_idx[cid] for cid in candidate_item_ids]
                 if candidate_item_idxs:
                     user_arr = _np.full(len(candidate_item_idxs), similar_user_idx, dtype=_np.int32)
@@ -1442,16 +1498,25 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
                         by_id = {m.id: m for m in movies}
                         ordered = [by_id[mid] for mid in top_movie_ids if mid in by_id]
                         if ordered:
-                            return ordered
+                            return [_serialize_rec(m, 'movie') for m in ordered]
     except Exception as e:
         # NCF path failed; fall back to content-based
         print(f"Guest NCF attempt failed: {e}")
 
-    # Return top 12 content-based candidates
-    return [x[0] for x in scored_candidates[:12]]
+    # Return top 12 content-based candidates (mixed movies + shows)
+    return [_serialize_rec(x[0], x[2]) for x in scored_candidates[:12]]
 
 # --- USER INTERACTIONS (Guest/Watchlist) ---
 
+@app.post("/interactions/reset/{guest_id}")
+def reset_guest_interactions(guest_id: str, db: Session = Depends(get_db)):
+    """Delete all interactions for a guest user (reset preferences)."""
+    user = db.query(models.User).filter(models.User.username == guest_id).first()
+    if not user:
+        return {"status": "no_user"}
+    db.query(models.Interaction).filter(models.Interaction.user_id == user.id).delete()
+    db.commit()
+    return {"status": "reset", "user_id": user.id}
 
 
 @app.get("/interactions/status")

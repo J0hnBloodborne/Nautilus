@@ -19,34 +19,68 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
 </head>
-<body>
+<body class="with-sidebar">
+
+    <!-- SIDEBAR NAVIGATION -->
+    <nav id="sidebar" class="sidebar">
+        <div class="sidebar-logo">
+            <img src="/static/152989.svg" alt="N" style="width:40px; filter:drop-shadow(2px 2px 0px #000);">
+        </div>
+        
+        <ul class="nav-links">
+            <li class="nav-item active" onclick="loadHome()" title="Home">
+                <i class="fa-solid fa-house"></i>
+                <span class="link-text">Home</span>
+            </li>
+            <li class="nav-item" onclick="loadCollection('watchlist')" title="Watchlist">
+                <i class="fa-solid fa-bookmark"></i>
+                <span class="link-text">Logbook</span>
+            </li>
+            <li class="nav-item" onclick="loadCollection('movies')" title="Movies">
+                <i class="fa-solid fa-film"></i>
+                <span class="link-text">Movies</span>
+            </li>
+            <li class="nav-item" onclick="loadCollection('tv')" title="TV Shows">
+                <i class="fa-solid fa-tv"></i>
+                <span class="link-text">Series</span>
+            </li>
+        </ul>
+
+        <div class="nav-bottom">
+            <li class="nav-item" onclick="toggleTheme()" title="Toggle Theme">
+                <i class="fa-solid fa-moon"></i>
+                <span class="link-text">Theme</span>
+            </li>
+            <li class="nav-item" onclick="openSettings()" title="Settings">
+                <i class="fa-solid fa-gear"></i>
+                <span class="link-text">Settings</span>
+            </li>
+        </div>
+    </nav>
 
     <header>
-        <div class="header-content">
-            <span style="position: absolute; left: 10px; top: 5px; font-family: var(--font-pixel); font-size: 1.2rem; color: var(--ink); opacity: 0.7;">
-                Reminder: Please use an adblocker!
-            </span>
-            <div class="top-controls">
-                <button class="theme-toggle" onclick="toggleTheme()">
-                    <i class="fa-solid fa-moon"></i><span class="btn-text"> Dark Mode</span>
-                </button>
-                <a href="/admin" class="admin-link">
-                    <i class="fa-solid fa-user-shield"></i><span class="btn-text"> Admin</span>
-                </a>
-            </div>
-
+        <div class="header-content header-row">
             <!-- Logo -->
             <h1 class="logo" onclick="loadHome()">
-                <!-- SVG Galleon Logo -->
-                <img src="/static/152989.svg" alt="Galleon Logo" class="galleon-icon">
                 <span class="logo-text">Nautilus</span>
             </h1>
             
+            <!-- Center: Search -->
             <div class="search-container">
                 <i class="fa-solid fa-magnifying-glass search-icon"></i>
                 <input type="text" id="search-input" placeholder="Search the Seven Seas..." autocomplete="off">
                 <button id="search-clear" onclick="clearSearch()" style="display:none;">X</button>
                 <div id="live-results" class="dropdown hidden"></div>
+            </div>
+
+            <!-- Right: Quick Actions -->
+            <div class="header-right">
+                <button class="header-icon-btn" onclick="playRandomMovie()" title="Random Movie">
+                    <i class="fa-solid fa-dice"></i>
+                </button>
+                <button class="header-icon-btn" onclick="loadCollection('movies')" title="Browse All Movies">
+                    <i class="fa-solid fa-compass"></i>
+                </button>
             </div>
         </div>
     </header>
@@ -95,11 +129,13 @@
                     <div class="controls-left">
                         <span style="color:var(--gold); font-weight:bold; font-size:1rem;">SOURCE:</span>
                         <select id="source-select" class="pixel-select" onchange="changeSource(this.value)">
-                            <option value="nautilus" selected>★ Nautilus (Best)</option>
-                            <option value="auto">VidLink</option>
-                            <option value="VidSrc.to">VidSrc.to</option>
-                            <option value="VidSrc.net">VidSrc.net</option>
+                            <option value="VidSrc.to" selected>★ VidSrc.to</option>
+                            <option value="VidSrc.pro">VidSrc.pro</option>
                             <option value="SuperEmbed">SuperEmbed</option>
+                            <option value="SmashyStream">SmashyStream</option>
+                            <option value="2Embed">2Embed</option>
+                            <option value="AutoEmbed">AutoEmbed</option>
+                            <option value="VidLink">VidLink</option>
                         </select>
                     </div>
                     <button class="pixel-btn" onclick="closePlayer()"><i class="fa-solid fa-xmark"></i> EXIT</button>
@@ -144,10 +180,53 @@
         </div>
     </div>
 
+    <!-- Settings Overlay -->
+    <div id="settings-overlay" class="modal hidden" onclick="if(event.target===this)closeSettings()">
+        <div class="modal-content parchment-bg" style="max-width:480px; padding:2rem;">
+            <span class="close-btn" onclick="closeSettings()"><i class="fa-solid fa-xmark"></i></span>
+            <h2 style="font-family:var(--font-header); font-size:2rem; color:var(--gold); margin-bottom:1.5rem;">⚙ Settings</h2>
+            <div style="font-family:var(--font-pixel); font-size:1.1rem; display:flex; flex-direction:column; gap:1.2rem;">
+                <!-- Default Source -->
+                <div>
+                    <label style="color:var(--gold); font-weight:bold;">Default Player Source</label>
+                    <select id="settings-default-source" class="pixel-select" style="width:100%; margin-top:0.4rem;">
+                        <option value="VidSrc.to">VidSrc.to</option>
+                        <option value="VidSrc.pro">VidSrc.pro</option>
+                        <option value="SuperEmbed">SuperEmbed</option>
+                        <option value="SmashyStream">SmashyStream</option>
+                        <option value="2Embed">2Embed</option>
+                        <option value="AutoEmbed">AutoEmbed</option>
+                        <option value="VidLink">VidLink</option>
+                    </select>
+                </div>
+                <!-- Theme -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Dark Theme</label>
+                    <button class="pixel-btn" onclick="toggleTheme()" style="font-size:0.9rem;"><i class="fa-solid fa-moon"></i> Toggle</button>
+                </div>
+                <!-- Clear Watch History -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Watch Progress</label>
+                    <button class="pixel-btn" onclick="clearWatchProgress()" style="font-size:0.9rem;"><i class="fa-solid fa-trash"></i> Clear All</button>
+                </div>
+                <!-- Clear Interactions -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Reset Preferences</label>
+                    <button class="pixel-btn" onclick="resetPreferences()" style="font-size:0.9rem;"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                </div>
+                <!-- Guest ID -->
+                <div style="margin-top:0.5rem; padding-top:0.8rem; border-top:1px solid var(--gold-30);">
+                    <label style="color:var(--gold); font-weight:bold;">Guest ID</label>
+                    <div style="color:var(--text-muted); font-size:0.95rem; margin-top:0.3rem; word-break:break-all;" id="settings-guest-id"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Footer -->
     <footer class="site-footer">
         <div class="footer-content">
-            <div class="footer-left">⚓ Nautilus™ — End-to-End MLOps (Entertainment & Media)</div>
+            <div class="footer-left">⚓ Nautilus™ — Streaming Platform</div>
             <div class="footer-right">© 2025 Nautilus™. All booty used for research & learning.</div>
         </div>
     </footer>
