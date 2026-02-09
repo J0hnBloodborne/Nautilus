@@ -11,6 +11,14 @@ import os
 import requests
 import shutil
 import numpy as np
+try:
+    import joblib
+except Exception:
+    joblib = None
+try:
+    from tensorflow import keras as _keras
+except Exception:
+    _keras = None
 import glob
 import ctypes
 import sys
@@ -34,6 +42,31 @@ TMDB_GENRE_MAP = {
     9648: "Mystery", 10749: "Romance", 878: "Sci-Fi", 10770: "TV Movie",
     53: "Thriller", 10752: "War", 37: "Western"
 }
+
+def normalize_genres(genres):
+    """Return list of {id,name} dicts from stored genres (list of dicts, ids, or names)."""
+    out = []
+    if not genres:
+        return out
+    if isinstance(genres, dict):
+        genres = [{"id": k, "name": v} for k, v in genres.items()]
+    for g in genres:
+        if isinstance(g, dict):
+            gid = g.get("id")
+            name = g.get("name") or TMDB_GENRE_MAP.get(gid)
+            if gid is not None and name:
+                out.append({"id": int(gid), "name": name})
+            elif name:
+                out.append({"id": None, "name": name})
+        elif isinstance(g, int):
+            out.append({"id": g, "name": TMDB_GENRE_MAP.get(g, str(g))})
+        elif isinstance(g, str):
+            out.append({"id": None, "name": g})
+    return out
+
+def genre_id_set(genres):
+    norm = normalize_genres(genres)
+    return {g["id"] for g in norm if g.get("id") is not None}
 
 load_dotenv()
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
@@ -260,102 +293,81 @@ def get_genre_prediction(tmdb_id: int, db: Session = Depends(get_db)):
     """Predict genres from plot (Replaced with DB lookup)."""
     item, type_ = get_media_item(db, tmdb_id)
 
-    if not item or not item.genres:
-        return {"genres": [], "primary": None}
+    # If we have genres in DB, use them
+    if item and item.genres:
+        genres = normalize_genres(item.genres)
+        genres_with_score = [{"id": g.get("id"), "name": g.get("name"), "score": 1.0} for g in genres]
+        primary = genres_with_score[0] if genres_with_score else None
+        return {"genres": genres_with_score, "primary": primary}
 
-    # Format DB genres to match expected API output
-    # DB genres is likely a list of dicts or strings. Assuming list of dicts from TMDB ingestion: {'id': 12, 'name': 'Adventure'}
-    genres = []
-    if isinstance(item.genres, list):
-         for g in item.genres:
-             if isinstance(g, dict) and 'id' in g and 'name' in g:
-                 genres.append({"id": g['id'], "name": g['name'], "score": 1.0})
-             elif isinstance(g, str):
-                 # Try to map name back to ID if possible or generate fake ID
-                 genres.append({"id": 0, "name": g, "score": 1.0})
+    # Fallback to TMDB metadata when DB lacks genres
+    if TMDB_API_KEY:
+        try:
+            m_url = f"{TMDB_BASE_URL}/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+            t_url = f"{TMDB_BASE_URL}/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+            resp = requests.get(m_url, timeout=5)
+            if resp.status_code != 200:
+                resp = requests.get(t_url, timeout=5)
+            data = resp.json() if resp.status_code == 200 else {}
+            g_list = data.get("genres", []) or []
+            genres = [{"id": g.get("id"), "name": g.get("name"), "score": 1.0} for g in g_list if g.get("name")]
+            primary = genres[0] if genres else None
+            return {"genres": genres, "primary": primary}
+        except Exception:
+            pass
 
-    primary = genres[0] if genres else None
-    return {"genres": genres, "primary": primary}
+    return {"genres": [], "primary": None}
     
 @app.get("/related/{tmdb_id}")
 def get_related_movies(tmdb_id: int, db: Session = Depends(get_db)):
-    """Association- and genre-based related items."""
-    # Simplified legacy fallback: Just find movies with similar genres if possible, or return popular
-    # For now, simply returning popular movies as widely applicable recommendations
-    popular = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(10).all()
-    return popular
-
+    """Related items using genre Jaccard + normalized popularity (movies or shows)."""
     movie = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb_id).first()
     show = db.query(models.TVShow).filter(models.TVShow.tmdb_id == tmdb_id).first()
 
-    # 1) If this is a TV show, only suggest TV shows
+    # Resolve media type and candidates
     if show and not movie:
-        base_shows = db.query(models.TVShow).filter(models.TVShow.id != show.id)
-        related_shows = (
-            base_shows
-            .filter(models.TVShow.popularity_score.isnot(None))
-            .order_by(models.TVShow.popularity_score.desc())
-            .limit(5)
-            .all()
-        )
-        # Attach media_type tag for frontend
-        return [dict(jsonable_encoder(s), media_type="tv") for s in related_shows]
+        src_genres = genre_id_set(show.genres)
+        max_pop = db.query(func.max(models.TVShow.popularity_score)).scalar() or 1
+        candidates = db.query(models.TVShow).filter(models.TVShow.id != show.id, models.TVShow.popularity_score.isnot(None)).limit(600).all()
+        scored = []
+        for cand in candidates:
+            j = 0
+            if src_genres:
+                inter = src_genres.intersection(genre_id_set(cand.genres))
+                union = src_genres.union(genre_id_set(cand.genres))
+                j = (len(inter) / len(union)) if union else 0
+            pop_norm = (cand.popularity_score or 0) / max_pop
+            hybrid = 0.7 * j + 0.3 * pop_norm
+            scored.append((cand, hybrid))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = [dict(jsonable_encoder(s[0]), media_type="tv") for s in scored[:10]]
+        if not top:
+            fallback = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(10).all()
+            top = [dict(jsonable_encoder(s), media_type="tv") for s in fallback]
+        return top
 
-    related_items: list = []
+    if movie:
+        src_genres = genre_id_set(movie.genres)
+        max_pop = db.query(func.max(models.Movie.popularity_score)).scalar() or 1
+        candidates = db.query(models.Movie).filter(models.Movie.id != movie.id, models.Movie.popularity_score.isnot(None)).limit(900).all()
+        scored = []
+        for cand in candidates:
+            inter = src_genres.intersection(genre_id_set(cand.genres)) if src_genres else set()
+            union = src_genres.union(genre_id_set(cand.genres)) if src_genres else genre_id_set(cand.genres)
+            j = (len(inter) / len(union)) if union else 0
+            pop_norm = (cand.popularity_score or 0) / max_pop
+            hybrid = 0.7 * j + 0.3 * pop_norm
+            scored.append((cand, hybrid))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = [dict(jsonable_encoder(s[0]), media_type="movie") for s in scored[:10]]
+        if not top:
+            fallback = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(10).all()
+            top = [dict(jsonable_encoder(m), media_type="movie") for m in fallback]
+        return top
 
-    # 2) Movie path: try association-based related movies first
-    if movie and rules is not None and tmdb_id in rules:
-        related_tmdb_ids = rules.get(tmdb_id, [])
-        if related_tmdb_ids:
-            q = db.query(models.Movie).filter(models.Movie.tmdb_id.in_(related_tmdb_ids))
-            q = q.filter(models.Movie.id != movie.id)
-            related_items = q.order_by(models.Movie.popularity_score.desc()).limit(5).all()
-
-    # 3) Genre-based fallback when association rules are missing/empty
-    if movie and not related_items:
-        # Movie.genres is stored as JSON; expect a list of TMDB genre IDs
-        source_genres = movie.genres or []
-        if isinstance(source_genres, dict):
-            source_genres = list(source_genres.keys())
-
-        candidates_q = (
-            db.query(models.Movie)
-            .filter(models.Movie.id != movie.id)
-            .filter(models.Movie.genres.isnot(None))
-            .filter(models.Movie.popularity_score.isnot(None))
-        )
-        candidates = candidates_q.limit(200).all()
-
-        if source_genres:
-            source_set = set(source_genres)
-            filtered = []
-            for cand in candidates:
-                g = cand.genres or []
-                if isinstance(g, dict):
-                    g = list(g.keys())
-                if source_set.intersection(set(g)):
-                    filtered.append(cand)
-        else:
-            filtered = candidates
-
-        # Shuffle for diversity and pick up to 5
-        import random
-        random.shuffle(filtered)
-        related_items = filtered[:5]
-
-    # 4) Final fallback: popular movies if still empty
-    if movie and not related_items:
-        related_items = (
-            db.query(models.Movie)
-            .filter(models.Movie.id != movie.id)
-            .filter(models.Movie.popularity_score.isnot(None))
-            .order_by(models.Movie.popularity_score.desc())
-            .limit(5)
-            .all()
-        )
-
-    # Attach media_type tag so frontend can tell these are movies
-    return [dict(jsonable_encoder(m), media_type="movie") for m in related_items]
+    # If nothing found, return popular movies as generic related
+    popular = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(10).all()
+    return [dict(jsonable_encoder(m), media_type="movie") for m in popular]
 
 # --- 2. CORE FEATURES ---
 
@@ -803,6 +815,51 @@ def api_shows_top_rated(limit: int = 50, min_votes: int = 5, db: Session = Depen
     shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(limit).all()
     return [{'title': s.title, 'tmdb_id': s.tmdb_id, 'popularity': s.popularity_score, 'poster_path': s.poster_path} for s in shows]
 
+
+@app.get("/trending")
+def api_trending(days: int = 7, limit: int = 20, db: Session = Depends(get_db)):
+    """Trending movies/shows based on recent interactions; fallback to popularity."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = _dt.utcnow() - _td(days=days)
+
+    # Movies
+    movie_rows = db.query(
+        models.Interaction.movie_id,
+        func.count(models.Interaction.id).label("cnt")
+    ).filter(
+        models.Interaction.movie_id.isnot(None),
+        models.Interaction.timestamp >= cutoff
+    ).group_by(models.Interaction.movie_id).order_by(func.count(models.Interaction.id).desc()).limit(limit).all()
+    movie_ids = [r[0] for r in movie_rows if r[0] is not None]
+    trending_movies = db.query(models.Movie).filter(models.Movie.id.in_(movie_ids)).all() if movie_ids else []
+    # Preserve order
+    by_id = {m.id: m for m in trending_movies}
+    trending_movies_ordered = [by_id[mid] for mid in movie_ids if mid in by_id]
+    if len(trending_movies_ordered) < limit:
+        extra = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(limit - len(trending_movies_ordered)).all()
+        trending_movies_ordered.extend(extra)
+
+    # Shows
+    show_rows = db.query(
+        models.Interaction.tv_show_id,
+        func.count(models.Interaction.id).label("cnt")
+    ).filter(
+        models.Interaction.tv_show_id.isnot(None),
+        models.Interaction.timestamp >= cutoff
+    ).group_by(models.Interaction.tv_show_id).order_by(func.count(models.Interaction.id).desc()).limit(limit).all()
+    show_ids = [r[0] for r in show_rows if r[0] is not None]
+    trending_shows = db.query(models.TVShow).filter(models.TVShow.id.in_(show_ids)).all() if show_ids else []
+    by_id_s = {s.id: s for s in trending_shows}
+    trending_shows_ordered = [by_id_s[sid] for sid in show_ids if sid in by_id_s]
+    if len(trending_shows_ordered) < limit:
+        extra_s = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(limit - len(trending_shows_ordered)).all()
+        trending_shows_ordered.extend(extra_s)
+
+    return {
+        "movies": trending_movies_ordered[:limit],
+        "shows": trending_shows_ordered[:limit]
+    }
+
 _NCF_MODEL = None
 _NCF_ARTIFACTS = None
 
@@ -812,6 +869,9 @@ def load_recommender_ncf():
     global _NCF_MODEL, _NCF_ARTIFACTS
     if _NCF_MODEL is not None and _NCF_ARTIFACTS is not None:
         return _NCF_MODEL, _NCF_ARTIFACTS
+
+    if _keras is None or joblib is None:
+        return None, None
 
     model_path = "src/models/recommender_ncf.keras"
     artifacts_path = "src/models/recommender_ncf_artifacts.pkl"
@@ -906,62 +966,32 @@ def load_clustering_artifacts():
 
 @app.get("/collections/ai")
 def get_ai_clusters(db: Session = Depends(get_db)):
-    """AI genre collections for home rows.
-    
-    Uses K-Means clusters if available, otherwise falls back to popularity bands.
-    """
-    cluster_map, cluster_meta = load_clustering_artifacts()
-    
-    if cluster_map and cluster_meta:
-        # Group movie IDs by cluster
-        clusters = {}
-        for mid, cluster in cluster_map.items():
-            if cluster not in clusters:
-                clusters[cluster] = []
-            clusters[cluster].append(mid)
-            
-        # Pick two largest clusters
-        sorted_clusters = sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)
-        
-        response = {}
-        
-        # Return top 2 clusters with dynamic names
-        for i in range(min(2, len(sorted_clusters))):
-            c_id = sorted_clusters[i][0]
-            c_ids = sorted_clusters[i][1][:40] # Limit to 40 items
-            
-            meta = cluster_meta.get(c_id, {"name": f"AI Cluster {i+1}"})
-            movies = db.query(models.Movie).filter(models.Movie.id.in_(c_ids)).all()
-            
-            response[f"cluster_{i+1}"] = {
-                "name": f"AI Cluster: {meta['name']}",
-                "items": movies
-            }
-            
-        return response
+    """Curated collections replacing AI clusters."""
+    # Trending (reuse /trending logic but movies only)
+    trending_movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(30).all()
 
-    # Fallback: Old logic
-    # Top band: more "mainstream" / blockbuster-like titles
-    cluster_1 = (
-        db.query(models.Movie)
-        .filter(models.Movie.popularity_score.isnot(None))
-        .order_by(models.Movie.popularity_score.desc())
-        .limit(40)
-        .all()
-    )
+    # Critics' Picks: top rated by interactions fallback popularity
+    top_rated = db.query(
+        models.Movie.id,
+        func.avg(models.Interaction.rating_value).label('avg_rating'),
+        func.count(models.Interaction.id).label('vote_count')
+    ).join(models.Interaction, models.Interaction.movie_id == models.Movie.id)
+    top_rated = top_rated.group_by(models.Movie.id).having(func.count(models.Interaction.id) >= 3).order_by(func.avg(models.Interaction.rating_value).desc()).limit(50).all()
+    rated_ids = [r.id for r in top_rated]
+    rated_movies = db.query(models.Movie).filter(models.Movie.id.in_(rated_ids)).all() if rated_ids else []
+    rated_by_id = {m.id: m for m in rated_movies}
+    critics = [rated_by_id[mid] for mid in rated_ids if mid in rated_by_id]
+    if len(critics) < 30:
+        extra = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(30 - len(critics)).all()
+        critics.extend(extra)
 
-    # Lower band: deeper cuts (less popular but still with overviews/posters)
-    cluster_2 = (
-        db.query(models.Movie)
-        .filter(models.Movie.popularity_score.isnot(None))
-        .order_by(models.Movie.popularity_score.asc())
-        .limit(40)
-        .all()
-    )
+    # Hidden gems: mid-popularity band
+    hidden = db.query(models.Movie).filter(models.Movie.popularity_score.isnot(None)).order_by(models.Movie.popularity_score.asc()).limit(40).all()
 
     return {
-        "cluster_1": {"name": "AI Cluster: High Voltage", "items": cluster_1},
-        "cluster_2": {"name": "AI Cluster: Deep Cuts", "items": cluster_2}
+        "cluster_1": {"name": "Trending Now", "items": trending_movies},
+        "cluster_2": {"name": "Critics' Picks", "items": critics[:40]},
+        "cluster_3": {"name": "Hidden Gems", "items": hidden}
     }
 
 class RevenueInput(BaseModel):
@@ -1039,9 +1069,9 @@ def get_movies_by_genre(genre_id: int, limit: int = 20, db: Session = Depends(ge
     candidates = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(500).all()
     filtered = []
     for movie in candidates:
-        if movie.genres and isinstance(movie.genres, list):
-            if genre_id in movie.genres:
-                filtered.append(movie)
+        norm = normalize_genres(movie.genres)
+        if any(g.get("id") == genre_id for g in norm):
+            filtered.append(movie)
         if len(filtered) >= limit:
             break
     return filtered
@@ -1241,19 +1271,20 @@ def record_interaction(input_data: InteractionInput, db: Session = Depends(get_d
     else:
         item_db_id = input_data.item_id
 
-    # Handle 'dislike' (Un-Like)
-    if input_data.action == 'dislike':
-        existing_like = db.query(models.Interaction).filter(
+    # Handle 'dislike' (Un-Like) or 'remove_watchlist'
+    if input_data.action in ('dislike', 'remove_watchlist'):
+        target_type = 'like' if input_data.action == 'dislike' else 'watchlist'
+        existing_int = db.query(models.Interaction).filter(
             models.Interaction.user_id == user.id,
             models.Interaction.movie_id == (item_db_id if input_data.media_type == 'movie' else None),
             models.Interaction.tv_show_id == (item_db_id if input_data.media_type == 'tv' else None),
-            models.Interaction.interaction_type == 'like'
+            models.Interaction.interaction_type == target_type
         ).first()
-        if existing_like:
-            db.delete(existing_like)
+        if existing_int:
+            db.delete(existing_int)
             db.commit()
-            return {"status": "unliked", "user_id": user.id}
-        return {"status": "nothing_to_unlike", "user_id": user.id}
+            return {"status": "removed", "user_id": user.id}
+        return {"status": "nothing_to_remove", "user_id": user.id}
 
     # Check if already exists
     existing = db.query(models.Interaction).filter(
@@ -1418,3 +1449,58 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
 
     # Return top 12 content-based candidates
     return [x[0] for x in scored_candidates[:12]]
+
+# --- USER INTERACTIONS (Guest/Watchlist) ---
+
+
+
+@app.get("/interactions/status")
+def get_interaction_status(guest_id: str, tmdb_id: int, media_type: str, action: str = 'watchlist', db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == guest_id).first()
+    if not user:
+        return {"active": False}
+    
+    if media_type == 'tv':
+        item = db.query(models.TVShow).filter(models.TVShow.tmdb_id == tmdb_id).first()
+        media_id = item.id if item else None
+        col = models.Interaction.tv_show_id
+    else:
+        item = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb_id).first()
+        media_id = item.id if item else None
+        col = models.Interaction.movie_id
+        
+    if not media_id:
+        return {"active": False}
+        
+    exists = db.query(models.Interaction).filter(
+        models.Interaction.user_id == user.id,
+        models.Interaction.interaction_type == action,
+        col == media_id
+    ).first()
+    return {"active": bool(exists)}
+
+@app.get("/collections/watchlist/{guest_id}")
+def get_watchlist(guest_id: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == guest_id).first()
+    if not user:
+        return []
+        
+    movies = db.query(models.Movie).join(models.Interaction).filter(
+        models.Interaction.user_id == user.id,
+        models.Interaction.interaction_type == 'watchlist',
+        models.Interaction.movie_id.isnot(None)
+    ).all()
+    
+    shows = db.query(models.TVShow).join(models.Interaction).filter(
+        models.Interaction.user_id == user.id,
+        models.Interaction.interaction_type == 'watchlist',
+        models.Interaction.tv_show_id.isnot(None)
+    ).all()
+    
+    results = []
+    for m in movies:
+        results.append(jsonable_encoder(m) | {"media_type": "movie"})
+    for s in shows:
+        results.append(jsonable_encoder(s) | {"media_type": "tv"})
+        
+    return results

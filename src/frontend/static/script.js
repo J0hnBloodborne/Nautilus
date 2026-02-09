@@ -308,66 +308,75 @@ async function runSearch() {
     }
 }
 
-// --- HOME LOADING (With ML) ---
+// --- HOME LOADING (Data-Driven) ---
 async function loadHome() {
     const container = document.getElementById('content-area');
     container.innerHTML = '<div style="padding:40px; text-align:center;">Initializing...</div>';
     
     try {
-        // Parallel Fetch: New Releases & Top Rated (movies & shows), Recs, Clusters, Desi, Animated, Random
-        const [resNewMovies, resTopMovies, resNewShows, resTopShows, resRecs, resClusters, resDesi, resAnimated, resRandom] = await Promise.all([
-            fetch(`/movies/new_releases?days=60&limit=50`),
-            // Request a larger pool for top-rated so client-side filtering still leaves ~20 visible items
+        // Parallel fetch
+        const [resWatchlist, resTrending, resTopMovies, resNewMovies, resTopShows, resNewShows, resRecs, resCollections, resAnimated, resRandom] = await Promise.all([
+            fetch(`/collections/watchlist/${getGuestId()}`),
+            fetch(`/trending?days=7&limit=30`),
             fetch(`/movies/top_rated_alltime?limit=200`),
-            fetch(`/shows/new_releases?days=60&limit=50`),
+            fetch(`/movies/new_releases?days=90&limit=80`),
             fetch(`/shows/top_rated_alltime?limit=200`),
-            // Include user preferences (if any) from localStorage via header to improve guest recs
+            fetch(`/shows/new_releases?days=90&limit=80`),
             (function(){
                 const prefs = localStorage.getItem('nautilus_user_prefs');
                 const headers = prefs ? { 'X-User-Prefs': prefs } : {};
                 return fetch(`/recommend/guest/${getGuestId()}`, { headers });
             })(),
             fetch(`/collections/ai`),
-            fetch(`/movies/desi?limit=15`),
-            fetch(`/movies/genre/16?limit=15`),
-            fetch(`/movies/random?limit=15`)
+            fetch(`/movies/genre/16?limit=20`), // animated spotlight
+            fetch(`/movies/random?limit=18`)
         ]);
 
-        const moviesNew = await resNewMovies.json();
+        const watchlist = await resWatchlist.json();
+        const trending = await resTrending.json();
         const moviesTop = await resTopMovies.json();
-        const showsNew = await resNewShows.json();
+        const moviesNew = await resNewMovies.json();
         const showsTop = await resTopShows.json();
+        const showsNew = await resNewShows.json();
         const recs = await resRecs.json();
-        const clusters = await resClusters.json();
-        const desi = await resDesi.json();
+        const collections = await resCollections.json();
         const animated = await resAnimated.json();
         const random = await resRandom.json();
         
+        const trendingMovies = (trending && trending.movies) ? trending.movies : [];
+        const trendingShows = (trending && trending.shows) ? trending.shows : [];
+        const curated1 = collections && collections.cluster_1 ? collections.cluster_1 : null;
+        const curated2 = collections && collections.cluster_2 ? collections.cluster_2 : null;
+        const curated3 = collections && collections.cluster_3 ? collections.cluster_3 : null;
+
         container.innerHTML = '';
         
+        // 0. Watchlist
+        if(Array.isArray(watchlist) && watchlist.length > 0) createRow('Your Watchlist', watchlist, 'mixed');
+
         // 1. RecSys Row
-        if(recs.length > 0) createRow('Picked for You (AI RecSys)', recs, 'movie');
+        if(Array.isArray(recs) && recs.length > 0) createRow('For You', recs, 'movie');
 
-    // 2. Top Rated above New Releases (server-provided data)
-    // Render Top Rated first so classics appear above recent releases
-    if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
-    if (moviesNew && moviesNew.length > 0) createRow('New Releases', moviesNew, 'movie');
+        // 2. Trending
+        if(trendingMovies.length > 0) createRow('Trending Now (Movies)', trendingMovies, 'movie');
+        if(trendingShows.length > 0) createRow('Trending Now (Series)', trendingShows, 'tv');
 
-    if (showsTop && showsTop.length > 0) createRow('Top Rated (Series)', showsTop, 'tv');
-    if (showsNew && showsNew.length > 0) createRow('New Releases (Series)', showsNew, 'tv');
+        // 3. Top Rated then New
+        if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
+        if (moviesNew && moviesNew.length > 0) createRow('New Releases', moviesNew, 'movie');
+        if (showsTop && showsTop.length > 0) createRow('Top Rated (Series)', showsTop, 'tv');
+        if (showsNew && showsNew.length > 0) createRow('New Releases (Series)', showsNew, 'tv');
         
-        // 3. New Genre Rows
-        if(desi.length > 0) createRow('Desi Hits', desi, 'movie');
+        // 4. Curated Collections
+        if(curated2 && curated2.items && curated2.items.length > 0) createRow(curated2.name || 'Critics\' Picks', curated2.items, 'movie');
+        if(curated3 && curated3.items && curated3.items.length > 0) createRow(curated3.name || 'Hidden Gems', curated3.items, 'movie');
+        if(curated1 && curated1.items && curated1.items.length > 0 && trendingMovies.length === 0) createRow(curated1.name || 'Trending Now', curated1.items, 'movie');
+
+        // 5. Spotlight Genres
         if(animated.length > 0) createRow('Animated Worlds', animated, 'movie');
-        
-        // 4. Random Row with Regen
-        if(random.length > 0) createRow('Random Picks', random, 'movie', true);
 
-        // 5. Clustering Rows
-        if(clusters.cluster_1 && clusters.cluster_1.items.length > 0) 
-            createRow(clusters.cluster_1.name, clusters.cluster_1.items, 'movie');
-        if(clusters.cluster_2 && clusters.cluster_2.items.length > 0) 
-            createRow(clusters.cluster_2.name, clusters.cluster_2.items, 'movie');
+        // 6. Random Row with Regen
+        if(random.length > 0) createRow('Random Picks', random, 'movie', true);
 
     } catch (err) {
         console.error(err);
@@ -500,26 +509,18 @@ function openModal(item, typeOverride=null) {
                         const sorted = [...d.genres].sort((a, b) => (b.score || 0) - (a.score || 0));
                         const names = sorted.map(g => g.name).filter(Boolean);
                         if (names.length > 0) {
-                            const text = `AI Genres: ${names.join(', ')}`;
+                            const text = `Genres: ${names.join(', ')}`;
                             addBadgeToRow(text);
                         }
                     } else if (d && d.genre) {
                         // Legacy single-genre response
-                        addBadgeToRow(`AI Genre: ${d.genre}`);
+                        addBadgeToRow(`Genre: ${d.genre}`);
                     }
                 } catch (err) {
                     console.error('Error rendering genre badges', err);
                 }
             })
             .catch(err => console.error('Genre prediction failed', err));
-
-        // 2. Revenue
-        fetch(`/movie/${tmdbId}/prediction`)
-            .then(r => r.json())
-            .then(d => {
-                if (d && d.label) addBadgeToRow(`Forecast: ${d.label}`);
-            })
-            .catch(err => console.error('Revenue prediction failed', err));
     }
 
     // Related (Association + fallback) for both movies and TV
@@ -584,21 +585,46 @@ function openModal(item, typeOverride=null) {
     currentSeason = 1;
     currentEpisode = 1;
     
-    // Like Button
-    const likeBtn = document.createElement('button');
-    likeBtn.className = 'pixel-btn'; // Use standard pixel button class
-    likeBtn.innerHTML = '<i class="fa-regular fa-heart"></i>'; // Empty heart by default
-    likeBtn.style.cssText = "margin-left:10px; font-size:1.6rem; padding: 12px 18px;"; // Match play button height
-    likeBtn.onclick = () => toggleLike(item, likeBtn);
+    // --- Interaction Buttons (Like & Watchlist) ---
+    const btnGroup = document.createElement('div');
+    btnGroup.style.display = 'inline-flex';
+    btnGroup.style.gap = '10px';
+    btnGroup.style.marginLeft = '10px';
+    btnGroup.id = 'modal-actions';
+
+    // Helper: Create Button
+    const createActionBtn = (iconClass, action) => {
+        const btn = document.createElement('button');
+        btn.className = 'pixel-btn';
+        btn.innerHTML = `<i class="${iconClass}"></i>`;
+        btn.dataset.action = action;
+        btn.style.cssText = "font-size:1.6rem; padding: 12px 18px;";
+        return btn;
+    };
+
+    const likeBtn = createActionBtn('fa-regular fa-heart', 'like'); // empty heart
+    const listBtn = createActionBtn('fa-solid fa-plus', 'watchlist'); // plus
+
+    likeBtn.onclick = () => toggleInteraction('like', item, likeBtn);
+    listBtn.onclick = () => toggleInteraction('watchlist', item, listBtn);
+
+    btnGroup.appendChild(likeBtn);
+    btnGroup.appendChild(listBtn);
     
     const playBtn = document.querySelector('#play-btn');
     if (playBtn) {
-        // Remove old like button if exists (to prevent duplicates on re-open)
+        // Cleanup old buttons/groups
+        const oldGroup = document.getElementById('modal-actions');
+        if(oldGroup) oldGroup.remove();
+        // Remove legacy like button if exists
         const oldLike = playBtn.parentNode.querySelector('.pixel-btn:not(#play-btn)');
         if(oldLike) oldLike.remove();
         
-        playBtn.parentNode.insertBefore(likeBtn, playBtn.nextSibling);
+        playBtn.parentNode.insertBefore(btnGroup, playBtn.nextSibling);
     }
+
+    // Check Status
+    checkInteractionStatus(item, likeBtn, listBtn);
 
     if (playBtn) {
         playBtn.style.display = isMovie ? 'block' : 'none';
@@ -855,7 +881,7 @@ async function refreshRandom(btn) {
             card.innerHTML = `
                 <img src="${poster}" alt="${item.title || item.name}" loading="lazy" class="poster">
             `;
-            card.onclick = () => openModal(item.tmdb_id, type);
+            card.onclick = () => openModal(item, type);
             scroller.appendChild(card);
         });
     } catch (e) {
@@ -867,28 +893,69 @@ async function refreshRandom(btn) {
 }
 
 // --- INTERACTIONS ---
-async function toggleLike(item, btn) {
+async function checkInteractionStatus(item, likeBtn, listBtn) {
+    const tmdbId = item.tmdb_id || item.id;
+    let type = item.media_type;
+    if (!type) type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+    const gid = getGuestId();
+
+    const updateBtn = (btn, active, iconActive, iconInactive, color) => {
+        if(active) {
+            btn.innerHTML = `<i class="${iconActive}" style="color:${color}"></i>`;
+            btn.dataset.active = "true";
+        } else {
+            btn.innerHTML = `<i class="${iconInactive}"></i>`;
+            btn.dataset.active = "false";
+        }
+    };
+
+    // Check Like
+    fetch(`/interactions/status?guest_id=${gid}&tmdb_id=${tmdbId}&media_type=${type}&action=like`)
+        .then(r=>r.json())
+        .then(d => updateBtn(likeBtn, d.active, 'fa-solid fa-heart', 'fa-regular fa-heart', '#ff0055'))
+        .catch(()=>{});
+
+    // Check Watchlist
+    fetch(`/interactions/status?guest_id=${gid}&tmdb_id=${tmdbId}&media_type=${type}&action=watchlist`)
+        .then(r=>r.json())
+        .then(d => updateBtn(listBtn, d.active, 'fa-solid fa-check', 'fa-solid fa-plus', '#00ffaa'))
+        .catch(()=>{});
+}
+
+async function toggleInteraction(actionType, item, btn) {
     SoundManager.play('coin');
     const tmdbId = item.tmdb_id || item.id;
-    const type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+    let type = item.media_type;
+    if (!type) type = (item.first_air_date || item.name) ? 'tv' : 'movie';
+    const isActive = btn.dataset.active === "true";
+
+    let apiAction = actionType;
+    if (actionType === 'like' && isActive) apiAction = 'dislike';
+    if (actionType === 'watchlist' && isActive) apiAction = 'remove_watchlist';
     
-    // Optimistic UI
-    const isLiked = btn.classList.contains('liked');
-    const action = isLiked ? 'dislike' : 'like'; // Toggle
+    // Optimistic
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
     
-    if (action === 'like') {
-        btn.classList.add('liked');
-        btn.innerHTML = '<i class="fa-solid fa-heart"></i>'; // Full heart
-        btn.style.color = '#e50914';
-        btn.style.borderColor = '#e50914';
-    } else {
-        btn.classList.remove('liked');
-        btn.innerHTML = '<i class="fa-regular fa-heart"></i>'; // Empty heart
-        btn.style.color = 'var(--ink)';
-        btn.style.borderColor = 'var(--ink)';
+    await sendInteraction(apiAction, tmdbId, type);
+    
+    // Re-render based on toggled state
+    if (actionType === 'like') {
+        if (apiAction === 'like') {
+            btn.innerHTML = '<i class="fa-solid fa-heart" style="color:#ff0055"></i>';
+            btn.dataset.active = "true";
+        } else {
+            btn.innerHTML = '<i class="fa-regular fa-heart"></i>';
+            btn.dataset.active = "false";
+        }
+    } else if (actionType === 'watchlist') {
+        if (apiAction === 'watchlist') {
+             btn.innerHTML = '<i class="fa-solid fa-check" style="color:#00ffaa"></i>';
+             btn.dataset.active = "true";
+        } else {
+             btn.innerHTML = '<i class="fa-solid fa-plus"></i>';
+             btn.dataset.active = "false";
+        }
     }
-    
-    await sendInteraction(action, tmdbId, type);
 }
 
 async function sendInteraction(action, tmdbId, type) {

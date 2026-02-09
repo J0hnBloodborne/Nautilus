@@ -9,6 +9,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 from src.core.models import TVShow, Season, Episode
+from typing import Dict, List
 
 load_dotenv()
 API_KEY = os.getenv("TMDB_API_KEY")
@@ -19,6 +20,33 @@ Session = sessionmaker(bind=engine)
 session = Session()
 
 BASE_URL = "https://api.themoviedb.org/3"
+
+# --- GENRE HELPERS ---
+_TV_GENRE_MAP: Dict[int, str] | None = None
+
+def load_tv_genre_map() -> Dict[int, str]:
+    """Fetch TMDB TV genre map once and cache."""
+    global _TV_GENRE_MAP
+    if _TV_GENRE_MAP is not None:
+        return _TV_GENRE_MAP
+    try:
+        url = f"{BASE_URL}/genre/tv/list?api_key={API_KEY}&language=en-US"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        _TV_GENRE_MAP = {g["id"]: g["name"] for g in data.get("genres", [])}
+    except Exception:
+        _TV_GENRE_MAP = {}
+    return _TV_GENRE_MAP
+
+def format_genres(genre_ids: List[int]) -> List[dict]:
+    genre_map = load_tv_genre_map()
+    out = []
+    for gid in genre_ids or []:
+        name = genre_map.get(gid)
+        if name:
+            out.append({"id": gid, "name": name})
+    return out
 
 # --- NETWORK CONFIG ---
 # Setup robust session with retries
@@ -69,10 +97,12 @@ def fetch_shows(pages=None, fetch_all=False, start_page=1):
                     # 1. Check/Create Show
                     show = session.query(TVShow).filter_by(tmdb_id=item['id']).first()
                     if not show:
+                        genres = format_genres(item.get('genre_ids', []))
                         show = TVShow(
                             title=item['name'],
                             tmdb_id=item['id'],
                             overview=item['overview'],
+                            genres=genres,
                             poster_path=item['poster_path'],
                             popularity_score=item['popularity']
                         )
@@ -101,6 +131,18 @@ def _fetch_details(show):
     
     if not details:
         return
+
+    # Update genres if missing
+    try:
+        if not show.genres:
+            g_ids = [g.get('id') for g in details.get('genres', []) if g.get('id') is not None]
+            formatted = format_genres(g_ids)
+            if formatted:
+                show.genres = formatted
+                session.add(show)
+                session.commit()
+    except Exception:
+        session.rollback()
 
     for s_meta in details.get('seasons', []):
         s_num = s_meta['season_number']
@@ -144,15 +186,47 @@ def _fetch_details(show):
             print(f"Failed to fetch season {s_num} for {show.title}: {e}")
             session.rollback()
 
+    def backfill_missing_genres(batch_size: int = 200):
+        """Fetch genres for shows missing them."""
+        qs = session.query(TVShow).filter((TVShow.genres.is_(None)) | (TVShow.genres == [])).limit(batch_size).all()
+        if not qs:
+            print("No shows missing genres.")
+            return
+        updated = 0
+        for show in qs:
+            try:
+                url = f"{BASE_URL}/tv/{show.tmdb_id}?api_key={API_KEY}&language=en-US"
+                resp = requests.get(url, timeout=10)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                g_ids = [g.get('id') for g in data.get('genres', []) if g.get('id') is not None]
+                formatted = format_genres(g_ids)
+                if formatted:
+                    show.genres = formatted
+                    session.add(show)
+                    updated += 1
+                    if updated % 50 == 0:
+                        session.commit()
+            except Exception:
+                session.rollback()
+                continue
+        session.commit()
+        print(f"Backfilled genres for {updated} shows.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest TV Shows")
     parser.add_argument("--pages", type=int, default=2, help="Number of pages")
     parser.add_argument("--all", action="store_true", help="Fetch MAX pages")
     parser.add_argument("--start", type=int, default=1, help="Start Page")
+    parser.add_argument("--backfill-genres", action="store_true", help="Backfill genres for existing shows")
     
     args = parser.parse_args()
     try:
-        fetch_shows(pages=args.pages, fetch_all=args.all, start_page=args.start)
-        print("TV Ingestion Complete.")
+        if args.backfill_genres:
+            backfill_missing_genres()
+        else:
+            fetch_shows(pages=args.pages, fetch_all=args.all, start_page=args.start)
+            print("TV Ingestion Complete.")
     except KeyboardInterrupt:
         print("\nStopped.")
