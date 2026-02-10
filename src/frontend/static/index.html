@@ -15,9 +15,9 @@
     <!-- ICONS: FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    <link rel="stylesheet" href="/static/styles.css?v=pirate_v2">
+    <link rel="stylesheet" href="/static/styles.css?v=pirate_v8">
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+    <link rel="stylesheet" href="/static/player.css?v=5">
 </head>
 <body class="with-sidebar">
 
@@ -43,10 +43,6 @@
             <li class="nav-item" onclick="loadCollection('tv')" title="TV Shows">
                 <i class="fa-solid fa-tv"></i>
                 <span class="link-text">Series</span>
-            </li>
-            <li class="nav-item" onclick="loadGenreExplore()" title="Genres">
-                <i class="fa-solid fa-compass"></i>
-                <span class="link-text">Explore</span>
             </li>
         </ul>
 
@@ -82,7 +78,7 @@
                 <button class="header-icon-btn" onclick="playRandomMovie()" title="Random Movie">
                     <i class="fa-solid fa-dice"></i>
                 </button>
-                <button class="header-icon-btn" onclick="loadGenreExplore()" title="Explore Genres">
+                <button class="header-icon-btn" onclick="loadCollection('movies')" title="Browse All Movies">
                     <i class="fa-solid fa-compass"></i>
                 </button>
             </div>
@@ -129,23 +125,18 @@
             
             <!-- Player Area -->
             <div id="player-wrapper" class="hidden">
-                <div class="player-controls">
-                    <div class="controls-left">
-                        <span style="color:var(--gold); font-weight:bold; font-size:1rem;">SOURCE:</span>
-                        <select id="source-select" class="pixel-select" onchange="changeSource(this.value)">
-                            <option value="VidSrc.to" selected>★ VidSrc.to</option>
-                            <option value="VidSrc.pro">VidSrc.pro</option>
-                            <option value="SuperEmbed">SuperEmbed</option>
-                            <option value="SmashyStream">SmashyStream</option>
-                            <option value="2Embed">2Embed</option>
-                            <option value="AutoEmbed">AutoEmbed</option>
-                            <option value="VidLink">VidLink</option>
-                        </select>
+                <!-- Source Hunt Overlay -->
+                <div id="hunt-overlay" class="hunt-overlay hidden">
+                    <div class="hunt-content">
+                        <div class="hunt-logo">⚓</div>
+                        <h3 class="hunt-title">HUNTING STREAMS</h3>
+                        <div class="hunt-subtitle">Scanning providers...</div>
+                        <div id="hunt-grid" class="hunt-grid"></div>
+                        <div id="hunt-status" class="hunt-status"></div>
                     </div>
-                    <button class="pixel-btn" onclick="closePlayer()"><i class="fa-solid fa-xmark"></i> EXIT</button>
                 </div>
 
-                <div id="artplayer-app" style="height: 100%; width: 100%; display: none;"></div>
+                <div id="nautilus-player" style="height: 100%; width: 100%;"></div>
                 <iframe id="embed-frame" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
             </div>
 
@@ -168,16 +159,13 @@
                     <!-- Controls -->
                     <div class="control-deck">
                         <button id="play-btn" class="pixel-btn action"><i class="fa-solid fa-play"></i> PLAY</button>
-                        <div id="download-wrapper" style="position:relative; display:inline-block;">
-                            <button id="download-btn" class="pixel-btn" title="Download" onclick="toggleDownloadMenu()"><i class="fa-solid fa-download"></i></button>
-                            <div id="download-dropdown" class="download-menu" style="display:none;"></div>
-                        </div>
+                        <button id="download-btn" class="pixel-btn" title="Download" onclick="startAutoDownload()"><i class="fa-solid fa-download"></i></button>
                         <!-- Like button is added dynamically by script.js -->
                     </div>
 
-                    <!-- Trailer Preview -->
-                    <div id="trailer-preview" class="hidden" style="margin-top:14px;">
-                        <div style="position:relative; padding-bottom:56.25%; height:0; overflow:hidden; border-radius:6px; border:2px solid var(--gold);">
+                    <!-- Trailer Preview (compact) -->
+                    <div id="trailer-preview" class="hidden" style="margin-top:8px;">
+                        <div style="position:relative; padding-bottom:40%; height:0; overflow:hidden; border-radius:4px; border:2px solid var(--gold); max-width:420px;">
                             <iframe id="trailer-iframe" style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" allow="autoplay; encrypted-media" allowfullscreen></iframe>
                         </div>
                     </div>
@@ -195,23 +183,92 @@
         </div>
     </div>
 
+    <!-- Download Modal -->
+    <div id="download-modal" class="modal hidden" onclick="if(event.target===this)closeDownloadModal()">
+        <div class="modal-content parchment-bg" style="max-width:460px; padding:1.5rem 2rem;">
+            <span class="close-btn" onclick="closeDownloadModal()" style="font-size:1.8rem; top:10px; right:14px;"><i class="fa-solid fa-xmark"></i></span>
+            <h2 style="font-family:var(--font-header); font-size:2rem; color:var(--gold); margin-bottom:1rem;"><i class="fa-solid fa-download"></i> Download</h2>
+            
+            <div id="dl-loading" style="text-align:center; padding:2rem; font-family:var(--font-pixel); color:var(--ink);">
+                <i class="fa-solid fa-spinner fa-spin" style="font-size:2rem; color:var(--gold);"></i>
+                <div style="margin-top:0.8rem;">Hunting download sources...</div>
+            </div>
+            
+            <div id="dl-content" class="hidden">
+                <!-- Source label -->
+                <div style="font-family:var(--font-pixel); color:var(--ink); font-size:0.9rem;">
+                    Source: <span id="dl-source" style="color:var(--gold); font-weight:bold;"></span>
+                </div>
+                
+                <!-- Quality Selection -->
+                <div>
+                    <label style="font-family:var(--font-pixel); color:var(--ink); font-weight:bold; font-size:1rem;">Quality</label>
+                    <div id="dl-qualities" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;"></div>
+                </div>
+                
+                <!-- Subtitle Selection -->
+                <div>
+                    <label style="font-family:var(--font-pixel); color:var(--ink); font-weight:bold; font-size:1rem;">Subtitles</label>
+                    <select id="dl-subs" class="pixel-select" style="width:100%; margin-top:0.4rem; font-size:0.95rem; padding:8px;">
+                        <option value="">None</option>
+                    </select>
+                </div>
+                
+                <!-- Download Button -->
+                <button id="dl-start" class="pixel-btn action" style="width:100%; justify-content:center; margin-top:0.5rem; font-size:1.3rem; padding:10px;">
+                    <i class="fa-solid fa-download"></i> Download Now
+                </button>
+            </div>
+            
+            <div id="dl-error" class="hidden" style="text-align:center; padding:1.5rem; font-family:var(--font-pixel); color:var(--red);">
+                No downloadable sources found. Try playing first to find streams.
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Overlay -->
     <div id="settings-overlay" class="modal hidden" onclick="if(event.target===this)closeSettings()">
-        <div class="modal-content parchment-bg" style="max-width:480px; padding:2rem;">
+        <div class="modal-content parchment-bg" style="max-width:520px; padding:2rem;">
             <span class="close-btn" onclick="closeSettings()"><i class="fa-solid fa-xmark"></i></span>
             <h2 style="font-family:var(--font-header); font-size:2rem; color:var(--gold); margin-bottom:1.5rem;">⚙ Settings</h2>
             <div style="font-family:var(--font-pixel); font-size:1.1rem; display:flex; flex-direction:column; gap:1.2rem;">
+                
+                <!-- Player Section -->
+                <div style="color:var(--gold); font-weight:bold; font-size:1.3rem; border-bottom:1px solid var(--gold); padding-bottom:4px; margin-top:0.5rem;">Player</div>
+                
+                <!-- Default Quality -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Default Quality</label>
+                    <select id="settings-quality" class="pixel-select" style="font-size:0.9rem; padding:6px;">
+                        <option value="auto">Auto</option>
+                        <option value="360">360p</option>
+                        <option value="480">480p</option>
+                        <option value="720">720p</option>
+                        <option value="1080">1080p</option>
+                        <option value="4k">4K</option>
+                    </select>
+                </div>
+                
+                <!-- Auto-play Subtitles -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Auto-play Subtitles</label>
+                    <button id="settings-autocc" class="pixel-btn" style="font-size:0.9rem; padding:6px 14px;"></button>
+                </div>
+                
+                <!-- Subtitle Size -->
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--gold); font-weight:bold;">Subtitle Size</label>
+                    <input type="range" id="settings-subsize" min="0.5" max="2" step="0.1" value="1" style="width:120px; accent-color:var(--gold);">
+                </div>
+                
+                <!-- General Section -->
+                <div style="color:var(--gold); font-weight:bold; font-size:1.3rem; border-bottom:1px solid var(--gold); padding-bottom:4px; margin-top:0.8rem;">General</div>
+                
                 <!-- Default Source -->
                 <div>
                     <label style="color:var(--gold); font-weight:bold;">Default Player Source</label>
                     <select id="settings-default-source" class="pixel-select" style="width:100%; margin-top:0.4rem;">
-                        <option value="VidSrc.to">VidSrc.to</option>
-                        <option value="VidSrc.pro">VidSrc.pro</option>
-                        <option value="SuperEmbed">SuperEmbed</option>
-                        <option value="SmashyStream">SmashyStream</option>
-                        <option value="2Embed">2Embed</option>
-                        <option value="AutoEmbed">AutoEmbed</option>
-                        <option value="VidLink">VidLink</option>
+                        <option value="auto">Auto (Best Available)</option>
                     </select>
                 </div>
                 <!-- Theme -->
@@ -246,6 +303,7 @@
         </div>
     </footer>
 
-    <script src="/static/script.js"></script>
+    <script src="/static/player.js?v=8"></script>
+    <script src="/static/script.js?v=8"></script>
 </body>
 </html>

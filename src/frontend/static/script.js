@@ -1,17 +1,20 @@
 const API_BASE = "";
-var art = null;
+var nautPlayer = null;  // Our custom NautilusPlayer
 var currentTmdbId = null, currentSeason = 1, currentEpisode = 1, currentType = 'movie';
 let searchTimeout;
+let currentHls = null;
+let huntedStreams = [];  // All found stream results from hunt
+let activeStreamIdx = 0; // Current stream index
 
 // --- SOUND MANAGER ---
 const SoundManager = {
     sounds: {},
+    volume: 0.1,  // 10% volume
     init() {
         // Preload sounds to reduce latency
         ['paper', 'coin', 'wood', 'click'].forEach(name => {
             const audio = new Audio(`/static/sounds/${name}.mp3`);
-            audio.volume = 0.6;
-            audio['coin'].volume = 1.0;
+            audio.volume = this.volume;
             this.sounds[name] = audio;
         });
     },
@@ -19,11 +22,14 @@ const SoundManager = {
         try {
             const audio = this.sounds[name];
             if (audio) {
+                audio.volume = this.volume;
                 audio.currentTime = 0.05; // Skip first 50ms to reduce silence delay
                 audio.play().catch(() => {}); // Ignore autoplay errors
             } else {
                 // Fallback if not preloaded
-                new Audio(`/static/sounds/${name}.mp3`).play().catch(() => {});
+                const a = new Audio(`/static/sounds/${name}.mp3`);
+                a.volume = this.volume;
+                a.play().catch(() => {});
             }
         } catch (e) {
             // Ignore audio system errors
@@ -337,7 +343,7 @@ function focusSearch() {
     }
 }
 
-async function loadCollection(type, page=1) {
+async function loadCollection(type, page=1, filters={}) {
     const container = document.getElementById('content-area');
     container.innerHTML = '<div style="padding:40px; text-align:center;">Navigating Charts...</div>';
     window.scrollTo(0,0);
@@ -346,17 +352,28 @@ async function loadCollection(type, page=1) {
     let endpoint = '';
     const PAGE_SIZE = 100;
     
+    // Merge with saved filter state
+    const genre = filters.genre || 0;
+    const sort = filters.sort || 'popularity';
+    const year = filters.year || 0;
+    
     if (type === 'watchlist') {
          title = 'Watchlist';
          endpoint = `/collections/watchlist/${getGuestId()}`;
          setActiveNav('Watchlist');
     } else if (type === 'movies') {
         title = 'All Movies';
-        endpoint = `/movies?limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}`;
+        let qs = `limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}&sort=${sort}`;
+        if (genre) qs += `&genre=${genre}`;
+        if (year) qs += `&year=${year}`;
+        endpoint = `/movies?${qs}`;
         setActiveNav('Movies');
     } else if (type === 'tv') {
         title = 'All TV Shows';
-        endpoint = `/shows?limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}`;
+        let qs = `limit=${PAGE_SIZE}&skip=${(page-1)*PAGE_SIZE}&sort=${sort}`;
+        if (genre) qs += `&genre=${genre}`;
+        if (year) qs += `&year=${year}`;
+        endpoint = `/shows?${qs}`;
         setActiveNav('TV Shows');
     }
 
@@ -364,76 +381,191 @@ async function loadCollection(type, page=1) {
         const res = await fetch(endpoint);
         let items = await res.json();
         
-        // Reverse watchlist to show newest first
         if (type === 'watchlist' && Array.isArray(items)) items = items.reverse();
 
         container.innerHTML = '';
+        
+        // --- FILTER BAR (Movies & TV only) ---
+        if (type === 'movies' || type === 'tv') {
+            const filterBar = buildFilterBar(type, page, { genre, sort, year });
+            container.appendChild(filterBar);
+        }
+        
         if (Array.isArray(items) && items.length > 0) {
-            // Full Grid Layout for Collections
             const wrapper = document.createElement('div');
             wrapper.className = 'row-wrapper';
             
-            // Helper: build pagination bar
+            const hasNextPage = items.length >= PAGE_SIZE;
+            // Estimate max pages (we don't know total, so allow up to page+1 if items fill)
+            const maxPage = hasNextPage ? Math.max(page + 5, 10) : page;
+
             function makePaginationBar() {
                 const bar = document.createElement('div');
-                bar.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin:1rem 0;";
-                const btnCss = "padding:8px 20px; border:2px solid var(--gold); background:rgba(0,0,0,0.3); color:var(--ink); cursor:pointer; font-family:var(--font-pixel); font-size:0.9rem; border-radius:4px;";
-                
-                const prev = document.createElement('button');
-                prev.innerText = "\u00AB Prev Page";
-                prev.style.cssText = btnCss;
-                prev.onclick = () => loadCollection(type, page - 1);
-                if (page <= 1) prev.style.visibility = 'hidden';
+                bar.className = 'filter-pagination';
+                const go = (p) => loadCollection(type, p, { genre, sort, year });
 
-                const label = document.createElement('span');
-                label.style.cssText = "font-family:var(--font-header); font-size:1.3rem; color:var(--ink);";
-                label.textContent = `Page ${page}`;
+                function addBtn(label, targetPage, disabled, active) {
+                    const btn = document.createElement('button');
+                    btn.className = 'page-btn' + (active ? ' active' : '');
+                    btn.innerHTML = label;
+                    btn.disabled = disabled;
+                    if (!disabled && !active) btn.onclick = () => go(targetPage);
+                    bar.appendChild(btn);
+                    return btn;
+                }
 
-                const next = document.createElement('button');
-                next.innerText = "Next Page \u00BB";
-                next.style.cssText = btnCss;
-                next.onclick = () => loadCollection(type, page + 1);
-                if (items.length < PAGE_SIZE) next.style.visibility = 'hidden';
+                // << First
+                addBtn('&laquo;', 1, page <= 1, false);
+                // < Prev
+                addBtn('&lsaquo;', page - 1, page <= 1, false);
 
-                bar.appendChild(prev);
-                bar.appendChild(label);
-                bar.appendChild(next);
+                // Page number buttons
+                let startP = Math.max(1, page - 4);
+                let endP = Math.min(maxPage, startP + 9);
+                if (endP - startP < 9) startP = Math.max(1, endP - 9);
+
+                if (startP > 1) {
+                    addBtn('1', 1, false, page === 1);
+                    if (startP > 2) {
+                        const dots = document.createElement('span');
+                        dots.className = 'page-ellipsis';
+                        dots.textContent = '...';
+                        bar.appendChild(dots);
+                    }
+                }
+
+                for (let p = startP; p <= endP; p++) {
+                    // Don't duplicate page 1 if already shown above
+                    if (p === 1 && startP > 1) continue;
+                    addBtn(String(p), p, false, p === page);
+                }
+
+                if (endP < maxPage) {
+                    const dots = document.createElement('span');
+                    dots.className = 'page-ellipsis';
+                    dots.textContent = '...';
+                    bar.appendChild(dots);
+                }
+
+                // > Next
+                addBtn('&rsaquo;', page + 1, !hasNextPage, false);
+                // >> Last (estimate)
+                addBtn('&raquo;', maxPage, !hasNextPage, false);
+
                 return bar;
             }
 
-            wrapper.innerHTML = `<div class="row-title">${title}</div>`;
+            const titleText = genre ? `${GENRE_MAP[genre] || 'Filtered'} ${type === 'tv' ? 'Series' : 'Movies'}` : title;
+            wrapper.innerHTML = `<div class="row-title">${titleText}</div>`;
             wrapper.appendChild(makePaginationBar());
             
             const grid = document.createElement('div');
-            grid.style.cssText = "display:flex; flex-wrap:wrap; gap:20px; padding:20px 0; justify-content:center;";
+            grid.className = 'collection-grid';
             
             items.forEach(item => {
-                // Filter out items without posters or names
                 if (!item.poster_path || (!item.title && !item.name)) return;
-
                 const card = document.createElement('div');
                 card.className = 'card';
                 let mType = item.media_type;
                 if (!mType) mType = (type === 'tv') ? 'tv' : 'movie';
-                
                 card.onclick = () => openModal(item, mType);
                 const name = item.title || item.name;
                 const imgSrc = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
-                card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
+                card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}"><div class="card-overlay">${name}</div>`;
                 grid.appendChild(card);
             });
             
             wrapper.appendChild(grid);
             wrapper.appendChild(makePaginationBar());
-
             container.appendChild(wrapper);
         } else {
-            container.innerHTML = `<div style="padding:50px; text-align:center; font-size:1.5rem; color:#888;">No charts found for ${title}. <button onclick="loadCollection('${type}', ${page-1})">Go Back</button></div>`;
+            container.innerHTML += `<div style="padding:50px; text-align:center; font-size:1.5rem; color:#888;">No results found. <button class="pixel-btn" onclick="loadCollection('${type}')">Clear Filters</button></div>`;
         }
     } catch (e) {
         console.error(e);
         container.innerHTML = '<div style="padding:40px; color:#f55">Navigation Error.</div>';
     }
+}
+
+// Genre ID → Name map
+const GENRE_MAP = {
+    28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy',
+    80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family',
+    14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
+    9648: 'Mystery', 10749: 'Romance', 878: 'Sci-Fi', 10770: 'TV Movie',
+    53: 'Thriller', 10752: 'War', 37: 'Western',
+    10759: 'Action & Adventure', 10765: 'Sci-Fi & Fantasy', 10768: 'War & Politics'
+};
+
+function buildFilterBar(type, page, current) {
+    const bar = document.createElement('div');
+    bar.className = 'filter-bar';
+
+    // --- Genre dropdown ---
+    const genreGroup = document.createElement('div');
+    genreGroup.className = 'filter-group';
+    genreGroup.innerHTML = '<label class="filter-label">Genre</label>';
+    const genreSel = document.createElement('select');
+    genreSel.className = 'pixel-filter-select';
+    genreSel.innerHTML = '<option value="0">All Genres</option>';
+    const genreIds = type === 'tv'
+        ? [10759, 16, 35, 80, 99, 18, 10751, 9648, 10765, 10768, 37]
+        : [28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 53, 10752, 37];
+    genreIds.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = GENRE_MAP[id] || id;
+        if (current.genre == id) opt.selected = true;
+        genreSel.appendChild(opt);
+    });
+    genreSel.onchange = () => loadCollection(type, 1, { genre: parseInt(genreSel.value), sort: current.sort, year: parseInt(yearSel.value) });
+    genreGroup.appendChild(genreSel);
+
+    // --- Sort dropdown ---
+    const sortGroup = document.createElement('div');
+    sortGroup.className = 'filter-group';
+    sortGroup.innerHTML = '<label class="filter-label">Sort By</label>';
+    const sortSel = document.createElement('select');
+    sortSel.className = 'pixel-filter-select';
+    [['popularity','Popular'], ['title','A-Z'], ['year','Newest'], ['rating','Top Rated']].forEach(([val, lab]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = lab;
+        if (current.sort === val) opt.selected = true;
+        sortSel.appendChild(opt);
+    });
+    sortSel.onchange = () => loadCollection(type, 1, { genre: parseInt(genreSel.value), sort: sortSel.value, year: parseInt(yearSel.value) });
+    sortGroup.appendChild(sortSel);
+
+    // --- Year dropdown ---
+    const yearGroup = document.createElement('div');
+    yearGroup.className = 'filter-group';
+    yearGroup.innerHTML = '<label class="filter-label">Year</label>';
+    const yearSel = document.createElement('select');
+    yearSel.className = 'pixel-filter-select';
+    yearSel.innerHTML = '<option value="0">All Years</option>';
+    const thisYear = new Date().getFullYear();
+    for (let y = thisYear; y >= 1970; y--) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (current.year == y) opt.selected = true;
+        yearSel.appendChild(opt);
+    }
+    yearSel.onchange = () => loadCollection(type, 1, { genre: parseInt(genreSel.value), sort: sortSel.value, year: parseInt(yearSel.value) });
+    yearGroup.appendChild(yearSel);
+
+    // --- Clear button ---
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'pixel-btn filter-clear';
+    clearBtn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> Clear';
+    clearBtn.onclick = () => loadCollection(type, 1, {});
+
+    bar.appendChild(genreGroup);
+    bar.appendChild(sortGroup);
+    bar.appendChild(yearGroup);
+    bar.appendChild(clearBtn);
+    return bar;
 }
 
 // --- HOME LOADING (Data-Driven) ---
@@ -686,42 +818,39 @@ function openModal(item, typeOverride=null) {
 
                 const panel = document.createElement('div');
                 panel.id = relatedContainerId;
-                // More breathing room under the main info
-                panel.style.marginTop = '40px';
+                panel.style.cssText = 'margin-top:18px; padding-top:14px; border-top:1px solid rgba(139,115,85,0.3); max-width:100%; overflow:hidden;';
 
                 const heading = document.createElement('div');
                 heading.textContent = 'More like this';
-                heading.style.cssText = 'font-family:var(--font-header); font-size:2rem; margin-bottom:14px; color:var(--ink); border-bottom:1px solid var(--gold); display:inline-block;';
+                heading.style.cssText = 'font-family:var(--font-header); font-size:1.4rem; margin-bottom:10px; color:var(--ink);';
                 panel.appendChild(heading);
 
                 const row = document.createElement('div');
-                // No horizontal scroll: a simple inline row of up to 5 cards
-                row.style.cssText = 'display:flex;gap:14px;flex-wrap:nowrap;';
+                row.style.cssText = 'display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;max-width:100%;';
 
-                list.slice(0, 5).forEach(rel => {
+                list.slice(0, 8).forEach(rel => {
                     const card = document.createElement('div');
-                    card.style.cssText = 'width:90px;cursor:pointer;flex-shrink:0;';
+                    card.style.cssText = 'width:70px;cursor:pointer;flex-shrink:0;';
 
-                    // Prefer explicit media_type from backend; fall back to heuristic.
                     const rType = rel.media_type || ((rel.first_air_date || rel.name) ? 'tv' : 'movie');
                     card.onclick = () => openModal(rel, rType);
 
                     const rName = rel.title || rel.name;
                     const rImg = rel.poster_path
-                        ? `https://image.tmdb.org/t/p/w185${rel.poster_path}`
-                        : 'https://via.placeholder.com/180x270';
+                        ? `https://image.tmdb.org/t/p/w154${rel.poster_path}`
+                        : 'https://via.placeholder.com/154x231';
 
                     card.innerHTML = `
-                        <img src="${rImg}" style="width:100%;border-radius:6px;display:block;" loading="lazy" alt="${rName}">
-                        <div style="margin-top:6px;font-size:0.75rem;color:var(--ink);opacity:0.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${rName}</div>
+                        <img src="${rImg}" style="width:70px;height:105px;border-radius:4px;display:block;object-fit:cover;" loading="lazy" alt="${rName}">
+                        <div style="margin-top:3px;font-size:0.6rem;color:var(--ink);opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:70px;">${rName}</div>
                     `;
                     row.appendChild(card);
                 });
 
                 panel.appendChild(row);
-                // Append to main modal text column
-                const descBlock = document.querySelector('#m-desc').parentElement;
-                if (descBlock) descBlock.appendChild(panel);
+                // Append below the modal info section
+                const modalInfo = document.querySelector('.modal-info');
+                if (modalInfo) modalInfo.appendChild(panel);
             } catch (err) {
                 console.error('Error rendering related strip', err);
             }
@@ -837,9 +966,6 @@ function closeModal() {
     // Clean up trailer
     const tp = document.getElementById('trailer-preview');
     if (tp) { tp.classList.add('hidden'); document.getElementById('trailer-iframe').src = 'about:blank'; }
-    // Hide download menu
-    const dd = document.getElementById('download-dropdown');
-    if (dd) dd.style.display = 'none';
 }
 function backdropClose(e) { if (e.target.id === 'modal') closeModal(); }
 /* demo video commit */
@@ -892,60 +1018,203 @@ async function loadSeasons(showId) {
 }
 
 // --- PLAYER LOGIC ---
+// (huntedStreams, activeStreamIdx declared at top)
+
 async function playVideo(type, tmdbId, season=1, episode=1) {
-    SoundManager.play('click'); // Play click sound
+    SoundManager.play('click');
     currentTmdbId = tmdbId; currentType = type; currentSeason = season; currentEpisode = episode;
-    
-    // Record Watch History
     sendInteraction('watch', tmdbId, type);
 
     const btn = document.querySelector('#play-btn');
     if(btn) btn.innerText = "HUNTING...";
-    
+
     // Hide Info, Show Player
     document.querySelector('.modal-header').classList.add('hidden');
-    // Stop trailer if playing
     const tp = document.getElementById('trailer-preview');
     if (tp) { tp.classList.add('hidden'); document.getElementById('trailer-iframe').src = 'about:blank'; }
     document.getElementById('player-wrapper').classList.remove('hidden');
-
-    // Mark modal as player-open so CSS can expand the player area
     const modal = document.getElementById('modal');
     if (modal) modal.classList.add('player-open');
 
-    const defaultSource = localStorage.getItem('nautilus_default_source') || 'VidSrc.to';
-    loadSource(defaultSource);
-    // Sync dropdown to reflect the chosen source
-    const srcSel = document.getElementById('source-select');
-    if (srcSel) srcSel.value = defaultSource;
+    // Init or reset our custom player
+    const playerContainer = document.getElementById('nautilus-player');
+    const iframe = document.getElementById('embed-frame');
+    iframe.classList.add('hidden');
+    iframe.src = "about:blank";
+
+    if (nautPlayer) { nautPlayer.destroy(); }
+    nautPlayer = new NautilusPlayer(playerContainer);
+    nautPlayer.setTitle(document.getElementById('m-title')?.textContent || 'Nautilus');
+    nautPlayer.onClose(() => closePlayer());
+
+    huntedStreams = [];
+    activeStreamIdx = 0;
+
+    // Show hunt overlay
+    showHuntOverlay();
+
+    // Fetch all providers list for the grid
+    try {
+        const provRes = await fetch('/stream/providers');
+        const provData = await provRes.json();
+        populateHuntGrid(provData.sources || []);
+    } catch(e) {
+        console.warn('[Nautilus] Failed to fetch providers', e);
+    }
+
+    // Run the hunt — try fast single first, then full scan in background
+    let gotFirst = false;
+    try {
+        const streamUrl = `/stream/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}`;
+        const res = await fetch(streamUrl);
+        const data = await res.json();
+        if (data.stream) {
+            huntedStreams.push(data);
+            gotFirst = true;
+            markHuntSource(data.source, 'found');
+            hideHuntOverlay();
+            nautPlayer.loadStream(data, huntedStreams);
+        }
+    } catch(e) {
+        console.warn('[Nautilus] Fast stream failed:', e);
+    }
+
+    // Full hunt scan in background for more sources
+    huntAllStreams().then(allResults => {
+        if (allResults.length > 0) {
+            const existingKeys = new Set(huntedStreams.map(s => `${s.source}-${s.embed||''}`));
+            for (const r of allResults) {
+                const key = `${r.source}-${r.embed||''}`;
+                if (!existingKeys.has(key)) {
+                    huntedStreams.push(r);
+                    existingKeys.add(key);
+                }
+            }
+            // Update the player's source list
+            if (nautPlayer) nautPlayer.allSources = huntedStreams;
+            if (!gotFirst && huntedStreams.length > 0) {
+                hideHuntOverlay();
+                nautPlayer.loadStream(huntedStreams[0], huntedStreams);
+            }
+        }
+        if (!gotFirst && huntedStreams.length === 0) {
+            hideHuntOverlay();
+            if (nautPlayer) nautPlayer._showError('No streams found — try again later');
+        }
+    });
+
     if(btn) btn.innerText = "▶ PLAY";
-    
-    // Start progress tracking (saves every 3s)
+
     startProgressTracking();
-    // Resume from saved progress
     const saved = getStoredProgress(type, tmdbId);
     if (saved && saved.time > 10) {
         setTimeout(() => {
-            if (art && art.duration) {
-                art.currentTime = saved.time;
-                art.notice.show = `Resumed at ${formatTime(saved.time)}`;
+            if (nautPlayer && nautPlayer.duration) {
+                nautPlayer.currentTime = saved.time;
             }
         }, 2500);
     }
 }
 
-function changeSource(provider) { loadSource(provider); }
+async function huntAllStreams() {
+    try {
+        const url = `/stream/hunt/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const results = (data.streams || []).map(s => s);
+        // Mark all found sources in hunt grid
+        results.forEach(r => markHuntSource(r.source, 'found'));
+        return results;
+    } catch(e) {
+        console.warn('[Nautilus] Hunt scan failed:', e);
+        return [];
+    }
+}
 
-async function loadSource(provider) {
-    const artContainer = document.getElementById('artplayer-app');
+/* ─── Stream Playback (delegated to NautilusPlayer) ──── */
+function playStream(data) {
+    if (!data || !data.stream) return;
+    if (!nautPlayer) return;
+    nautPlayer.loadStream(data, huntedStreams);
+    console.log(`[Nautilus] ▶ ${data.stream.type} from: ${data.source}${data.embed ? ' → ' + data.embed : ''}`);
+}
+
+function switchStream(value) {
+    const idx = parseInt(value);
+    if (!isNaN(idx) && huntedStreams[idx]) {
+        activeStreamIdx = idx;
+        playStream(huntedStreams[idx]);
+        return;
+    }
+    if (value === 'auto' && huntedStreams.length > 0) {
+        playStream(huntedStreams[0]);
+        return;
+    }
+    // Try this source via the provider engine (no embed iframes)
+    if (nautPlayer && value) {
+        fetch(`/stream/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&source=${value}`)
+            .then(r => r.json())
+            .then(data => { if (data.stream) playStream(data); })
+            .catch(e => console.warn('Source switch failed:', e));
+    }
+}
+
+// ─── Hunt Overlay ─────────────────────────────────
+function showHuntOverlay() {
+    const overlay = document.getElementById('hunt-overlay');
+    overlay.classList.remove('hidden');
+    document.getElementById('hunt-status').textContent = 'Scanning the seven seas...';
+}
+
+function hideHuntOverlay() {
+    const overlay = document.getElementById('hunt-overlay');
+    overlay.classList.add('hunt-fade-out');
+    setTimeout(() => {
+        overlay.classList.add('hidden');
+        overlay.classList.remove('hunt-fade-out');
+    }, 500);
+}
+
+function populateHuntGrid(sources) {
+    const grid = document.getElementById('hunt-grid');
+    grid.innerHTML = '';
+    sources.filter(src => !src.disabled).forEach(src => {
+        const cell = document.createElement('div');
+        cell.className = 'hunt-cell scanning';
+        cell.id = `hunt-${src.id}`;
+        cell.innerHTML = `<span class="hunt-name">${src.name}</span><span class="hunt-dot">●</span>`;
+        grid.appendChild(cell);
+    });
+    // Stagger animation
+    const cells = grid.querySelectorAll('.hunt-cell');
+    cells.forEach((cell, i) => {
+        cell.style.animationDelay = `${i * 0.08}s`;
+    });
+}
+
+function markHuntSource(sourceId, status) {
+    const cell = document.getElementById(`hunt-${sourceId}`);
+    if (!cell) return;
+    cell.classList.remove('scanning');
+    cell.classList.add(status); // 'found' or 'failed'
+    const dot = cell.querySelector('.hunt-dot');
+    if (dot) dot.textContent = status === 'found' ? '✓' : '✗';
+}
+
+async function loadDirectStream() {
+    // Legacy wrapper — redirects to new flow
+    await playVideo(currentType, currentTmdbId, currentSeason, currentEpisode);
+}
+
+function changeSource(provider) {
+    switchStream(provider);
+}
+
+async function loadLegacySource(provider) {
     const iframe = document.getElementById('embed-frame');
-    const select = document.getElementById('source-select');
-    
-    artContainer.style.display = 'none'; iframe.classList.add('hidden'); iframe.src = "about:blank";
-    if(art) art.pause();
-    
-    const prevLabel = select.options[select.selectedIndex].text;
-    select.options[select.selectedIndex].text = "Hunting...";
+    iframe.classList.add('hidden'); iframe.src = "about:blank";
+    // Destroy NautilusPlayer so we don't get double players
+    if (nautPlayer) { nautPlayer.destroy(); nautPlayer = null; }
 
     try {
         const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
@@ -955,48 +1224,23 @@ async function loadSource(provider) {
         if (data.type === 'embed') {
             iframe.classList.remove('hidden');
             iframe.src = data.url;
-        } else {
-            artContainer.style.display = 'block';
-            if (!art) initArtPlayer();
-            const proxyUrl = `/proxy_stream?url=${encodeURIComponent(data.url)}`;
-            art.switchUrl(proxyUrl);
+        } else if (data.url) {
+            // Wrap in a stream-like object for NautilusPlayer
+            if (!nautPlayer) {
+                const cont = document.getElementById('nautilus-player');
+                nautPlayer = new NautilusPlayer(cont);
+            }
+            nautPlayer.loadStream({ source: provider, stream: { type: 'hls', playlist: data.url, captions: [] } }, huntedStreams);
         }
-        select.options[select.selectedIndex].text = prevLabel;
     } catch (e) {
-        console.error(e);
-        select.options[select.selectedIndex].text = "Failed";
-        setTimeout(() => select.options[select.selectedIndex].text = prevLabel, 2000);
+        console.error('[Nautilus] Legacy source failed:', e);
     }
 }
 
-function initArtPlayer() {
-    art = new Artplayer({
-        container: '#artplayer-app',
-        url: '',
-        theme: '#0CAADC',
-        volume: 1.0,
-        autoplay: true,
-        setting: true,
-        fullscreen: true,
-        fullscreenWeb: true,
-        autoSize: true,
-        customType: {
-            m3u8: function (video, url) {
-                if (Hls.isSupported()) {
-                    const hls = new Hls();
-                    hls.loadSource(url);
-                    hls.attachMedia(video);
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = url;
-                }
-            }
-        }
-    });
-}
-
 function closePlayer() {
-    if (art) art.pause();
-    
+    if (nautPlayer) { nautPlayer.destroy(); nautPlayer = null; }
+    if (currentHls) { currentHls.destroy(); currentHls = null; }
+
     // Exit Fullscreen if active
     if (document.fullscreenElement) {
         document.exitFullscreen().catch(err => console.log(err));
@@ -1006,9 +1250,15 @@ function closePlayer() {
     document.getElementById('player-wrapper').classList.add('hidden');
     // Show Info Again
     document.querySelector('.modal-header').classList.remove('hidden');
-    document.querySelector('.close-btn').classList.remove('hidden'); // Show main close button
+    const closeBtn = document.querySelector('.close-btn');
+    if (closeBtn) closeBtn.classList.remove('hidden');
     const modal = document.getElementById('modal');
     if (modal) modal.classList.remove('player-open');
+
+    // Re-load the trailer preview so it reappears
+    if (currentTmdbId && currentType) {
+        loadTrailerPreview(currentTmdbId, currentType);
+    }
 }
 
 async function refreshRandom(btn) {
@@ -1156,50 +1406,14 @@ document.addEventListener('keydown', (e) => {
     const isPlayerOpen = modal && !modal.classList.contains('hidden') && playerWrapper && !playerWrapper.classList.contains('hidden');
     
     // Player-specific shortcuts (only when player is visible)
-    if (isPlayerOpen && art) {
-        switch(e.key) {
-            case ' ':
-            case 'k':
-            case 'K':
-                e.preventDefault();
-                art.playing ? art.pause() : art.play();
-                break;
-            case 'f':
-            case 'F':
-                e.preventDefault();
-                art.fullscreen = !art.fullscreen;
-                break;
-            case 'm':
-            case 'M':
-                e.preventDefault();
-                art.muted = !art.muted;
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                art.currentTime = Math.max(0, art.currentTime - 5);
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                art.currentTime = Math.min(art.duration, art.currentTime + 5);
-                break;
-            case 'ArrowUp':
-                e.preventDefault();
-                art.volume = Math.min(1, art.volume + 0.1);
-                break;
-            case 'ArrowDown':
-                e.preventDefault();
-                art.volume = Math.max(0, art.volume - 0.1);
-                break;
-            case 'j':
-            case 'J':
-                e.preventDefault();
-                art.currentTime = Math.max(0, art.currentTime - 10);
-                break;
-            case 'l':
-            case 'L':
-                e.preventDefault();
-                art.currentTime = Math.min(art.duration, art.currentTime + 10);
-                break;
+    // NautilusPlayer handles its own keyboard shortcuts internally,
+    // but we keep Escape to close the player from the main page
+    if (isPlayerOpen && nautPlayer) {
+        // NautilusPlayer's own listener handles space/k/f/m/arrows/j/l/c
+        // We only handle Escape here at the page level
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closePlayer();
         }
         return;
     }
@@ -1224,11 +1438,11 @@ let progressSaveInterval = null;
 function startProgressTracking() {
     if (progressSaveInterval) clearInterval(progressSaveInterval);
     progressSaveInterval = setInterval(() => {
-        if (!art || !art.playing || !currentTmdbId) return;
+        if (!nautPlayer || !nautPlayer.playing || !currentTmdbId) return;
         const progress = {
-            time: art.currentTime,
-            duration: art.duration,
-            percentage: art.duration ? (art.currentTime / art.duration * 100) : 0,
+            time: nautPlayer.currentTime,
+            duration: nautPlayer.duration,
+            percentage: nautPlayer.duration ? (nautPlayer.currentTime / nautPlayer.duration * 100) : 0,
             updatedAt: Date.now()
         };
         const key = `nautilus_progress_${currentType}_${currentTmdbId}`;
@@ -1237,7 +1451,7 @@ function startProgressTracking() {
             progress.episode = currentEpisode;
         }
         try { localStorage.setItem(key, JSON.stringify(progress)); } catch(e) {}
-    }, 3000); // Save every 3 seconds like sudoflix
+    }, 3000);
 }
 
 function getStoredProgress(type, tmdbId) {
@@ -1358,147 +1572,143 @@ function loadTrailerPreview(tmdbId, mediaType) {
         .catch(() => {});
 }
 
-// --- DOWNLOAD BUTTON ---
-function toggleDownloadMenu() {
-    const dd = document.getElementById('download-dropdown');
-    if (dd.style.display === 'none') {
-        populateDownloadMenu();
-        dd.style.display = 'block';
-        // Close on outside click
-        setTimeout(() => {
-            document.addEventListener('click', closeDownloadMenuOutside);
-        }, 10);
-    } else {
-        dd.style.display = 'none';
-        document.removeEventListener('click', closeDownloadMenuOutside);
-    }
-}
+// --- DOWNLOAD (auto-pick best source, download in-place) ---
+async function startAutoDownload() {
+    // Open the download modal
+    const dlModal = document.getElementById('download-modal');
+    const dlLoading = document.getElementById('dl-loading');
+    const dlContent = document.getElementById('dl-content');
+    const dlError = document.getElementById('dl-error');
 
-function closeDownloadMenuOutside(e) {
-    const wrapper = document.getElementById('download-wrapper');
-    if (!wrapper.contains(e.target)) {
-        document.getElementById('download-dropdown').style.display = 'none';
-        document.removeEventListener('click', closeDownloadMenuOutside);
-    }
-}
+    dlModal.classList.remove('hidden');
+    dlLoading.classList.remove('hidden');
+    dlContent.classList.add('hidden');
+    dlError.classList.add('hidden');
 
-function populateDownloadMenu() {
-    const dd = document.getElementById('download-dropdown');
-    const providers = ['VidSrc.to', 'VidSrc.pro', 'SuperEmbed', 'AutoEmbed'];
-    const type = currentType;
-    const id = currentTmdbId;
-
-    dd.innerHTML = '<div style="padding:6px 14px; font-size:0.8rem; color:var(--gold); border-bottom:1px solid rgba(139,115,85,0.3); font-weight:bold;"><i class="fa-solid fa-download"></i> Download via</div>';
-    providers.forEach(p => {
-        const a = document.createElement('a');
-        a.href = '#';
-        a.textContent = p;
-        a.onclick = (e) => {
-            e.preventDefault();
-            startDownloadVia(p);
-            dd.style.display = 'none';
-        };
-        dd.appendChild(a);
-    });
-}
-
-async function startDownloadVia(provider) {
     try {
-        const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
-        const res = await fetch(apiUrl);
-        const data = await res.json();
-        if (data.url) {
-            // Open in new tab — for embed sources the user can use browser's save
-            window.open(data.url, '_blank');
-        } else {
-            alert('No download source available from this provider.');
+        // Hunt for streams if we don't have any
+        let streams = huntedStreams;
+        if (!streams || streams.length === 0) {
+            const res = await fetch(`/stream/hunt/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}`);
+            const data = await res.json();
+            streams = (data.streams || []).map(s => ({
+                source: s.source,
+                embed: s.embed,
+                stream: s.stream,
+            }));
         }
-    } catch(e) {
-        alert('Download failed. Try another provider.');
-    }
-}
 
-// --- GENRE EXPLORE PAGE ---
-const GENRE_ICONS = {
-    28: '⚔️', 12: '🗺️', 16: '🎨', 35: '😂', 80: '🔪', 99: '📹',
-    18: '🎭', 10751: '👨‍👩‍👧‍👦', 14: '🧙', 36: '📜', 27: '👻', 10402: '🎵',
-    9648: '🔍', 10749: '💕', 878: '🚀', 10770: '📺', 53: '😰',
-    10752: '⚔️', 37: '🤠', 10759: '⚡', 10762: '🧒', 10763: '📰',
-    10764: '🏆', 10765: '👽', 10766: '💋', 10767: '🎙️', 10768: '🪖'
-};
+        // Find best downloadable stream (prefer file type with qualities, then HLS)
+        const downloadable = streams.filter(s => s.stream && (s.stream.type === 'file' || s.stream.type === 'hls'));
+        if (downloadable.length === 0) {
+            dlLoading.classList.add('hidden');
+            dlError.classList.remove('hidden');
+            return;
+        }
 
-async function loadGenreExplore() {
-    setActiveNav('Genres');
-    const container = document.getElementById('content-area');
-    container.innerHTML = '<div style="padding:40px; text-align:center;">Charting the Seven Seas...</div>';
-    window.scrollTo(0, 0);
+        // Pick first stream with file qualities, else first HLS
+        let picked = downloadable.find(s => s.stream.type === 'file' && s.stream.qualities?.length > 0) || downloadable[0];
+        const stream = picked.stream;
 
-    try {
-        const res = await fetch('/genres/overview');
-        const genres = await res.json();
+        // Populate source label
+        document.getElementById('dl-source').textContent = picked.embed ? `${picked.source} → ${picked.embed}` : picked.source;
 
-        container.innerHTML = '';
-        const header = document.createElement('div');
-        header.className = 'row-wrapper';
-        header.innerHTML = '<div class="row-title">Explore by Genre</div>';
-        container.appendChild(header);
+        // Populate quality options
+        const qualContainer = document.getElementById('dl-qualities');
+        qualContainer.innerHTML = '';
+        let selectedUrl = '';
+        let selectedHeaders = stream.headers || {};
 
-        const grid = document.createElement('div');
-        grid.className = 'genre-grid';
-        grid.style.padding = '0 1.5rem';
+        if (stream.type === 'file' && stream.qualities?.length > 0) {
+            const sorted = [...stream.qualities].sort((a, b) => {
+                const qA = parseInt(a.quality) || 0;
+                const qB = parseInt(b.quality) || 0;
+                return qB - qA;
+            });
+            sorted.forEach((q, idx) => {
+                const pill = document.createElement('button');
+                pill.className = 'dl-quality-pill' + (idx === 0 ? ' active' : '');
+                pill.textContent = q.quality === 'unknown' ? 'Auto' : q.quality + 'p';
+                pill.onclick = () => {
+                    qualContainer.querySelectorAll('.dl-quality-pill').forEach(p => p.classList.remove('active'));
+                    pill.classList.add('active');
+                    selectedUrl = q.url;
+                };
+                qualContainer.appendChild(pill);
+            });
+            selectedUrl = sorted[0].url;
+        } else if (stream.type === 'hls' && stream.playlist) {
+            const pill = document.createElement('button');
+            pill.className = 'dl-quality-pill active';
+            pill.textContent = 'HLS Stream';
+            qualContainer.appendChild(pill);
+            selectedUrl = stream.playlist;
+        }
 
-        genres.forEach(g => {
-            const island = document.createElement('div');
-            island.className = 'genre-island';
-            const icon = GENRE_ICONS[g.id] || '🎬';
-            const total = (g.movies || 0) + (g.shows || 0);
-            island.innerHTML = `
-                <span class="genre-icon">${icon}</span>
-                ${g.name}
-                <div class="genre-count">${total} titles</div>
-            `;
-            island.onclick = () => loadGenreResults(g.id, g.name);
-            grid.appendChild(island);
+        // Populate subtitles
+        const subSelect = document.getElementById('dl-subs');
+        subSelect.innerHTML = '<option value="">None</option>';
+        const captions = stream.captions || [];
+        captions.forEach((c, idx) => {
+            const opt = document.createElement('option');
+            opt.value = c.url;
+            opt.textContent = (c.lang || 'Sub').toUpperCase() + (c.format ? ` (${c.format})` : '');
+            subSelect.appendChild(opt);
         });
 
-        container.appendChild(grid);
-    } catch(e) {
-        console.error(e);
-        container.innerHTML = '<div style="padding:40px; color:#f55;">Failed to load genres.</div>';
+        // Download button
+        const dlBtn = document.getElementById('dl-start');
+        dlBtn.onclick = () => {
+            const title = document.getElementById('m-title')?.textContent || 'download';
+            const safeName = title.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
+
+            // Download video
+            let videoUrl = selectedUrl;
+            if (selectedHeaders && Object.keys(selectedHeaders).length) {
+                const params = new URLSearchParams({ url: selectedUrl });
+                if (selectedHeaders.Referer) params.append('referer', selectedHeaders.Referer);
+                if (selectedHeaders.Origin) params.append('origin', selectedHeaders.Origin);
+                videoUrl = `/proxy_stream?${params}`;
+            }
+
+            const a = document.createElement('a');
+            a.href = videoUrl;
+            a.download = safeName;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Download subtitle if selected
+            const subUrl = subSelect.value;
+            if (subUrl) {
+                setTimeout(() => {
+                    const sa = document.createElement('a');
+                    sa.href = subUrl;
+                    sa.download = safeName + '.srt';
+                    sa.target = '_blank';
+                    document.body.appendChild(sa);
+                    sa.click();
+                    document.body.removeChild(sa);
+                }, 500);
+            }
+
+            closeDownloadModal();
+        };
+
+        dlLoading.classList.add('hidden');
+        dlContent.classList.remove('hidden');
+
+    } catch (e) {
+        console.error('[Nautilus] Download error:', e);
+        dlLoading.classList.add('hidden');
+        dlError.classList.remove('hidden');
     }
 }
 
-async function loadGenreResults(genreId, genreName) {
-    const container = document.getElementById('content-area');
-    container.innerHTML = '<div style="padding:40px; text-align:center;">Loading...</div>';
-    window.scrollTo(0, 0);
-
-    try {
-        const [moviesRes, showsRes] = await Promise.all([
-            fetch(`/movies/genre/${genreId}?limit=60`),
-            fetch(`/shows/genre/${genreId}?limit=40`)
-        ]);
-        const movies = await moviesRes.json();
-        const shows = await showsRes.json();
-
-        container.innerHTML = '';
-
-        // Back button
-        const backBar = document.createElement('div');
-        backBar.style.cssText = 'padding: 0.5rem 1.5rem;';
-        backBar.innerHTML = `<button class="pixel-btn" onclick="loadGenreExplore()" style="font-size:0.9rem;"><i class="fa-solid fa-arrow-left"></i> All Genres</button>`;
-        container.appendChild(backBar);
-
-        if (movies.length > 0) createRow(`${genreName} Movies`, movies, 'movie');
-        if (shows.length > 0) createRow(`${genreName} Series`, shows, 'tv');
-
-        if (movies.length === 0 && shows.length === 0) {
-            container.innerHTML += '<div style="padding:40px; text-align:center; color:#888;">No content found for this genre.</div>';
-        }
-    } catch(e) {
-        console.error(e);
-        container.innerHTML = '<div style="padding:40px; color:#f55;">Failed to load genre results.</div>';
-    }
+function closeDownloadModal() {
+    document.getElementById('download-modal').classList.add('hidden');
 }
 
 // --- SETTINGS PANEL ---
@@ -1512,9 +1722,50 @@ function openSettings() {
     const gidEl = document.getElementById('settings-guest-id');
     if (gidEl) gidEl.textContent = getGuestId();
     // Save on change
-    sel.onchange = () => {
+    if (sel) sel.onchange = () => {
         localStorage.setItem('nautilus_default_source', sel.value);
     };
+
+    // --- Player Preferences ---
+    const prefs = (typeof getPlayerPrefs === 'function')
+        ? getPlayerPrefs()
+        : JSON.parse(localStorage.getItem('nautilus_player_prefs') || '{}');
+
+    const qualSel = document.getElementById('settings-quality');
+    if (qualSel) {
+        qualSel.value = prefs.preferredQuality || 'auto';
+        qualSel.onchange = () => {
+            const p = JSON.parse(localStorage.getItem('nautilus_player_prefs') || '{}');
+            p.preferredQuality = qualSel.value;
+            localStorage.setItem('nautilus_player_prefs', JSON.stringify(p));
+        };
+    }
+
+    const autoCcBtn = document.getElementById('settings-autocc');
+    if (autoCcBtn) {
+        const isOn = prefs.autoplaySubtitles || false;
+        autoCcBtn.textContent = isOn ? 'ON' : 'OFF';
+        autoCcBtn.style.background = isOn ? 'var(--gold)' : '#333';
+        autoCcBtn.style.color = isOn ? '#000' : '#ccc';
+        autoCcBtn.onclick = () => {
+            const p = JSON.parse(localStorage.getItem('nautilus_player_prefs') || '{}');
+            p.autoplaySubtitles = !p.autoplaySubtitles;
+            localStorage.setItem('nautilus_player_prefs', JSON.stringify(p));
+            autoCcBtn.textContent = p.autoplaySubtitles ? 'ON' : 'OFF';
+            autoCcBtn.style.background = p.autoplaySubtitles ? 'var(--gold)' : '#333';
+            autoCcBtn.style.color = p.autoplaySubtitles ? '#000' : '#ccc';
+        };
+    }
+
+    const subSizeRange = document.getElementById('settings-subsize');
+    if (subSizeRange) {
+        subSizeRange.value = prefs.subtitleSize || 1;
+        subSizeRange.oninput = () => {
+            const p = JSON.parse(localStorage.getItem('nautilus_player_prefs') || '{}');
+            p.subtitleSize = parseFloat(subSizeRange.value);
+            localStorage.setItem('nautilus_player_prefs', JSON.stringify(p));
+        };
+    }
 }
 
 function closeSettings() {

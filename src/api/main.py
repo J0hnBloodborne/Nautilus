@@ -1,15 +1,18 @@
 from fastapi import FastAPI, Depends, Request, UploadFile, File, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql import func
 from src.core.database import get_db
 from src.core import models
 from src.services.scrapers.universal import UniversalScraper
+from src.providers.runner import ProviderEngine
+from src.providers.base import MediaContext
 import httpx
 import os
 import requests
 import shutil
+import logging
 import numpy as np
 try:
     import joblib
@@ -526,15 +529,187 @@ async def play_content(media_type: str, tmdb_id: int, season: int = 1, episode: 
         return {"url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", "type": "direct", "source": "Test Stream"}
     return result
 
-@app.get("/proxy_stream")
-async def proxy_stream(url: str, request: Request):
-    client = httpx.AsyncClient()
-    headers = { "User-Agent": "Mozilla/5.0" }
-    req = client.build_request("GET", url, headers=headers)
-    r = await client.send(req, stream=True)
-    return StreamingResponse(
-        r.aiter_bytes(), status_code=r.status_code, media_type=r.headers.get("content-type"), background=client.aclose
+# ─── Direct Stream Provider Engine ───────────────────────────────
+# Returns direct HLS/MP4 streams (NOT embeds) with captions.
+# Tries all providers in rank order.
+_provider_engine = ProviderEngine(timeout=12)
+
+@app.get("/stream/{media_type}/{tmdb_id}")
+async def stream_content(media_type: str, tmdb_id: int, season: int = 1, episode: int = 1, source: str = None, db: Session = Depends(get_db)):
+    """Resolve direct streams via the provider engine. Returns HLS/MP4 URLs."""
+    # Build media context with title from DB/TMDB
+    title = ""
+    imdb_id = None
+    year = 0
+    genres = []
+    original_language = ""
+    item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    if item:
+        title = item.title or ""
+        imdb_id = getattr(item, "imdb_id", None)
+        rd = getattr(item, "release_date", "") or ""
+        year = int(rd[:4]) if rd and rd[:4].isdigit() else 0
+    # Always try TMDB for IMDB ID + genre/language info
+    if TMDB_API_KEY:
+        try:
+            ep = "movie" if media_type == "movie" else "tv"
+            r = requests.get(f"https://api.themoviedb.org/3/{ep}/{tmdb_id}?api_key={TMDB_API_KEY}&append_to_response=external_ids", timeout=4)
+            if r.ok:
+                d = r.json()
+                if not title:
+                    title = d.get("title") or d.get("name", "")
+                if not imdb_id:
+                    imdb_id = d.get("imdb_id") or (d.get("external_ids") or {}).get("imdb_id")
+                if not year:
+                    yr = d.get("release_date") or d.get("first_air_date", "")
+                    year = int(yr[:4]) if yr and yr[:4].isdigit() else 0
+                genres = [g.get("name", "") for g in d.get("genres", [])]
+                original_language = d.get("original_language", "")
+        except Exception:
+            pass
+
+    # Detect anime: Animation genre + Japanese language
+    is_anime = ("Animation" in genres and original_language == "ja")
+
+    media = MediaContext(
+        tmdb_id=tmdb_id,
+        imdb_id=imdb_id,
+        title=title,
+        year=year,
+        media_type=media_type,
+        season=season,
+        episode=episode,
+        is_anime=is_anime,
+        genres=genres,
     )
+
+    try:
+        if source:
+            result = await _provider_engine.run_source(source, media)
+        else:
+            result = await _provider_engine.run_all(media)
+    except Exception as e:
+        logging.error(f"Provider engine error: {e}")
+        result = None
+
+    if result:
+        return result.to_dict()
+
+    # Fallback to legacy embed scraper
+    scraper = UniversalScraper()
+    legacy = await scraper.get_stream(tmdb_id, media_type, season, episode)
+    if legacy:
+        return legacy
+    return {"error": "No streams found", "stream": None}
+
+@app.get("/stream/providers")
+async def list_providers():
+    """List all available source and embed scrapers with their ranks."""
+    return {
+        "sources": _provider_engine.list_sources(),
+        "embeds": _provider_engine.list_embeds(),
+    }
+
+@app.get("/stream/hunt/{media_type}/{tmdb_id}")
+async def hunt_all_streams(media_type: str, tmdb_id: int, season: int = 1, episode: int = 1, db: Session = Depends(get_db)):
+    """Scan ALL providers concurrently, return every working stream found."""
+    title = ""
+    imdb_id = None
+    year = 0
+    genres = []
+    original_language = ""
+    item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    if item:
+        title = item.title or ""
+        imdb_id = getattr(item, "imdb_id", None)
+        rd = getattr(item, "release_date", "") or ""
+        year = int(rd[:4]) if rd and rd[:4].isdigit() else 0
+    if TMDB_API_KEY:
+        try:
+            ep = "movie" if media_type == "movie" else "tv"
+            r = requests.get(f"https://api.themoviedb.org/3/{ep}/{tmdb_id}?api_key={TMDB_API_KEY}&append_to_response=external_ids", timeout=4)
+            if r.ok:
+                d = r.json()
+                if not title:
+                    title = d.get("title") or d.get("name", "")
+                if not imdb_id:
+                    imdb_id = d.get("imdb_id") or (d.get("external_ids") or {}).get("imdb_id")
+                if not year:
+                    yr = d.get("release_date") or d.get("first_air_date", "")
+                    year = int(yr[:4]) if yr and yr[:4].isdigit() else 0
+                genres = [g.get("name", "") for g in d.get("genres", [])]
+                original_language = d.get("original_language", "")
+        except Exception:
+            pass
+
+    is_anime = ("Animation" in genres and original_language == "ja")
+
+    media = MediaContext(
+        tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year,
+        media_type=media_type, season=season, episode=episode,
+        is_anime=is_anime, genres=genres,
+    )
+
+    results = await _provider_engine.run_all_streams(media)
+    return {
+        "streams": [r.to_dict() for r in results],
+        "count": len(results),
+    }
+
+@app.get("/proxy_stream")
+async def proxy_stream(url: str, request: Request, referer: str = None, origin: str = None):
+    import re as _re
+    from urllib.parse import urljoin, urlencode
+
+    headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+    if referer:
+        headers["Referer"] = referer
+    if origin:
+        headers["Origin"] = origin
+
+    is_manifest = url.split("?")[0].endswith((".m3u8", ".m3u"))
+
+    if is_manifest:
+        # Fetch fully to rewrite URLs
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+        content_type = r.headers.get("content-type", "")
+        text = r.text
+        lines = text.split("\n")
+        rewritten = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                abs_url = urljoin(url, stripped)
+                proxy_params = {"url": abs_url}
+                if referer: proxy_params["referer"] = referer
+                if origin:  proxy_params["origin"] = origin
+                rewritten.append(f"/proxy_stream?{urlencode(proxy_params)}")
+            elif stripped.startswith("#EXT-X-MAP:") and 'URI="' in stripped:
+                def _rewrite_uri(m):
+                    raw = m.group(1)
+                    abs_url = urljoin(url, raw)
+                    pp = {"url": abs_url}
+                    if referer: pp["referer"] = referer
+                    if origin:  pp["origin"] = origin
+                    return f'URI="/proxy_stream?{urlencode(pp)}"'
+                rewritten.append(_re.sub(r'URI="([^"]+)"', _rewrite_uri, stripped))
+            else:
+                rewritten.append(line)
+        return Response(content="\n".join(rewritten), media_type="application/vnd.apple.mpegurl",
+                        headers={"Access-Control-Allow-Origin": "*"})
+    else:
+        # Stream binary segments through
+        client = httpx.AsyncClient(follow_redirects=True)
+        req = client.build_request("GET", url, headers=headers)
+        r = await client.send(req, stream=True)
+        resp_headers = {"Access-Control-Allow-Origin": "*"}
+        ct = r.headers.get("content-type")
+        return StreamingResponse(
+            r.aiter_bytes(), status_code=r.status_code,
+            media_type=ct, headers=resp_headers,
+            background=client.aclose
+        )
 
 @app.post("/users/avatar")
 async def upload_avatar(file: UploadFile = File(...)):
@@ -545,8 +720,64 @@ async def upload_avatar(file: UploadFile = File(...)):
     return {"info": f"Avatar updated: {file.filename}"}
 
 @app.get("/movies")
-def get_movies(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    return db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).offset(skip).limit(limit).all()
+def get_movies(skip: int = 0, limit: int = 50, genre: int = None, sort: str = "popularity",
+               year: int = None, db: Session = Depends(get_db)):
+    """List movies with optional genre, year, and sort filters."""
+    q = db.query(models.Movie)
+
+    # Sort
+    if sort == "title":
+        q = q.order_by(models.Movie.title.asc())
+    elif sort == "year":
+        q = q.order_by(models.Movie.release_date.desc())
+    elif sort == "rating":
+        q = q.order_by(models.Movie.popularity_score.desc())  # best proxy
+    else:  # popularity (default)
+        q = q.order_by(models.Movie.popularity_score.desc())
+
+    candidates = q.limit(3000).all()
+
+    # Filter by genre + year in Python (DB genres may be None/unsupported JSON)
+    filtered = []
+    for m in candidates:
+        if genre:
+            ids = genre_id_set(m.genres)
+            if genre not in ids:
+                continue
+        if year and m.release_date:
+            try:
+                if not m.release_date.startswith(str(year)):
+                    continue
+            except Exception:
+                continue
+        filtered.append(m)
+
+    # If genre filter returned nothing, try TMDB discover
+    if genre and not filtered and TMDB_API_KEY:
+        try:
+            page_num = (skip // limit) + 1
+            tmdb_sort = "popularity.desc"
+            if sort == "title": tmdb_sort = "title.asc"
+            elif sort == "year": tmdb_sort = "primary_release_date.desc"
+            elif sort == "rating": tmdb_sort = "vote_average.desc"
+            url = f"{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres={genre}&sort_by={tmdb_sort}&page={page_num}&language=en-US"
+            if year:
+                url += f"&primary_release_year={year}"
+            resp = requests.get(url, timeout=8)
+            if resp.status_code == 200:
+                for item in resp.json().get("results", []):
+                    filtered.append({
+                        "tmdb_id": item.get("id"), "title": item.get("title", ""),
+                        "poster_path": item.get("poster_path"),
+                        "overview": item.get("overview", ""),
+                        "release_date": item.get("release_date", ""),
+                        "popularity_score": item.get("popularity", 0),
+                        "media_type": "movie"
+                    })
+        except Exception as e:
+            print(f"TMDB discover fallback error: {e}")
+
+    return filtered[skip:skip + limit]
 
 
 @app.get("/movies/new_releases")
@@ -724,8 +955,52 @@ def api_movies_top_rated(limit: int = 50, skip: int = 0, min_votes: int = 5, db:
 
 
 @app.get("/shows")
-def get_shows(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    return db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).offset(skip).limit(limit).all()
+def get_shows(skip: int = 0, limit: int = 50, genre: int = None, sort: str = "popularity",
+              year: int = None, db: Session = Depends(get_db)):
+    """List TV shows with optional genre, year, and sort filters."""
+    q = db.query(models.TVShow)
+
+    if sort == "title":
+        q = q.order_by(models.TVShow.title.asc())
+    elif sort == "year":
+        # TVShow may not have first_air_date column; fall back to popularity
+        q = q.order_by(models.TVShow.popularity_score.desc())
+    elif sort == "rating":
+        q = q.order_by(models.TVShow.popularity_score.desc())
+    else:
+        q = q.order_by(models.TVShow.popularity_score.desc())
+
+    candidates = q.limit(3000).all()
+
+    filtered = []
+    for s in candidates:
+        if genre:
+            ids = genre_id_set(s.genres)
+            if genre not in ids:
+                continue
+        filtered.append(s)
+
+    # TMDB discover fallback for genre
+    if genre and not filtered and TMDB_API_KEY:
+        try:
+            page_num = (skip // limit) + 1
+            url = f"{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_genres={genre}&sort_by=popularity.desc&page={page_num}&language=en-US"
+            resp = requests.get(url, timeout=8)
+            if resp.status_code == 200:
+                for item in resp.json().get("results", []):
+                    filtered.append({
+                        "tmdb_id": item.get("id"), "name": item.get("name", ""),
+                        "title": item.get("name", ""),
+                        "poster_path": item.get("poster_path"),
+                        "overview": item.get("overview", ""),
+                        "first_air_date": item.get("first_air_date", ""),
+                        "popularity_score": item.get("popularity", 0),
+                        "media_type": "tv"
+                    })
+        except Exception as e:
+            print(f"TMDB discover tv fallback error: {e}")
+
+    return filtered[skip:skip + limit]
 
 @app.get("/shows/{show_id}/seasons")
 def get_seasons(show_id: int, db: Session = Depends(get_db)):
