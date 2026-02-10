@@ -87,7 +87,7 @@ body {
 /* --- Sidebar --- */
 :root {
     --sidebar-width: 80px;
-    --sidebar-width-expanded: 240px;
+    --sidebar-width-expanded: 220px;
 }
 
 .sidebar {
@@ -441,6 +441,7 @@ main { padding-top: 90px; }
 .row-wrapper {
     margin-bottom: 3rem;
     position: relative;
+    padding: 0 30px; /* space for circular arrow buttons */
 }
 
 .row-title {
@@ -460,52 +461,121 @@ main { padding-top: 90px; }
     display: flex;
     gap: 1.5rem;
     overflow-x: auto;
-    padding: 1rem 0;
-    scrollbar-width: thin;
-    scrollbar-color: var(--gold) var(--bg-wood);
+    padding: 1rem 0 1.5rem;
+    scrollbar-width: none; /* Hide scrollbar for clean look */
+    -ms-overflow-style: none;
+    padding-left: 0.3rem;
 }
+.row-scroller::-webkit-scrollbar { display: none; }
 
 .row-arrow {
     position: absolute;
     top: 55%;
     transform: translateY(-50%);
-    background: rgba(0,0,0,0.7);
+    background: rgba(0,0,0,0.6);
     color: var(--gold);
-    border: 1px solid var(--gold);
-    font-size: 2rem;
-    padding: 0 10px;
+    border: 2px solid var(--gold);
+    font-size: 1.1rem;
+    padding: 10px 12px;
     cursor: pointer;
     z-index: 10;
-    height: 100px;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
-    font-family: var(--font-header);
-    transition: opacity 0.3s ease, background 0.2s;
+    justify-content: center;
+    font-family: var(--font-pixel);
+    transition: opacity 0.3s ease, background 0.3s, transform 0.2s;
+    backdrop-filter: blur(4px);
 }
 
-.row-arrow.prev { left: -50px; }
-.row-arrow.next { right: -50px; }
-.row-arrow:hover { background: var(--gold); color: var(--ink); }
+.row-arrow.prev { left: 0px; }
+.row-arrow.next { right: 0px; }
+.row-arrow:hover {
+    background: var(--gold);
+    color: var(--ink);
+    transform: translateY(-50%) scale(1.1);
+}
 
-/* Cards - "Wanted Poster" Style */
+/* Cards - "Treasure Map" Style */
 .card {
     flex: 0 0 auto;
     width: 180px;
-    transition: transform 0.2s, filter 0.2s;
+    aspect-ratio: 2/3;
+    transition: transform 0.35s cubic-bezier(.25,.8,.25,1), filter 0.3s, box-shadow 0.35s;
     cursor: pointer;
-    border: 4px solid var(--parchment-dark);
-    box-shadow: 0 5px 15px rgba(0,0,0,0.6);
-    filter: sepia(40%) contrast(1.1); /* Old photo look */
-    border-radius: 2px;
+    border: 3px solid var(--parchment-dark);
+    box-shadow:
+        0 4px 12px rgba(0,0,0,0.5),
+        inset 0 0 20px rgba(0,0,0,0.15);
+    filter: sepia(30%) contrast(1.05) brightness(0.95);
+    border-radius: 4px;
     position: relative;
+    overflow: hidden;
+    background: var(--parchment-dark);
+}
+
+/* Gold corner accents */
+.card::before,
+.card::after {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--gold);
+    opacity: 0.5;
+    transition: opacity 0.3s, width 0.3s, height 0.3s;
+    z-index: 2;
+    pointer-events: none;
+}
+.card::before {
+    top: 4px; left: 4px;
+    border-right: none; border-bottom: none;
+}
+.card::after {
+    bottom: 4px; right: 4px;
+    border-left: none; border-top: none;
+}
+
+/* Title overlay that appears on hover */
+.card .card-overlay {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 24px 8px 8px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.85));
+    color: var(--gold);
+    font-family: var(--font-pixel);
+    font-size: 0.85rem;
+    line-height: 1.2;
+    text-shadow: 1px 1px 2px #000;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 2;
+    pointer-events: none;
 }
 
 .card:hover {
-    transform: scale(1.08) rotate(-1deg);
+    transform: scale(1.06) translateY(-4px);
     border-color: var(--gold);
-    filter: sepia(0%) contrast(1);
+    filter: sepia(0%) contrast(1.05) brightness(1);
+    box-shadow:
+        0 8px 24px rgba(0,0,0,0.5),
+        0 0 12px rgba(212,175,55,0.2);
     z-index: 10;
-    /* Removed glow for less modern look */
+}
+
+.card:hover::before,
+.card:hover::after {
+    opacity: 1;
+    width: 22px;
+    height: 22px;
+}
+
+.card:hover .card-overlay {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 .poster {
@@ -513,6 +583,97 @@ main { padding-top: 90px; }
     height: 100%;
     object-fit: cover;
     display: block;
+}
+
+/* Continue Watching progress bar */
+.continue-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 4px;
+    background: rgba(0,0,0,0.5);
+    z-index: 3;
+}
+.continue-fill {
+    height: 100%;
+    background: var(--gold);
+    transition: width 0.3s;
+}
+.continue-ep {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+
+/* Genre Explore Grid */
+.genre-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.2rem;
+    padding: 1.5rem 0;
+}
+.genre-island {
+    position: relative;
+    background: var(--parchment-dark);
+    border: 2px solid var(--gold);
+    border-radius: 8px;
+    padding: 1.8rem 1.2rem;
+    text-align: center;
+    cursor: pointer;
+    font-family: var(--font-header);
+    font-size: 1.6rem;
+    color: var(--ink);
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    overflow: hidden;
+}
+.genre-island::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(135deg, rgba(212,175,55,0.08), transparent 60%);
+    pointer-events: none;
+}
+.genre-island:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    border-color: var(--gold);
+}
+.genre-island .genre-icon {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 0.5rem;
+}
+.genre-island .genre-count {
+    font-family: var(--font-pixel);
+    font-size: 0.85rem;
+    opacity: 0.6;
+    margin-top: 0.3rem;
+}
+
+/* Download menu in modal */
+.download-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: var(--parchment);
+    border: 2px solid var(--gold);
+    border-radius: 6px;
+    padding: 6px 0;
+    min-width: 180px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 50;
+    font-family: var(--font-pixel);
+}
+.download-menu a {
+    display: block;
+    padding: 8px 14px;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 0.95rem;
+    transition: background 0.15s;
+}
+.download-menu a:hover {
+    background: rgba(212,175,55,0.2);
 }
 
 /* --- Modal (The Captain's Quarters) --- */
@@ -887,6 +1048,7 @@ main { padding-top: 90px; }
 
     /* Cards smaller on mobile */
     .card { width: 130px; }
+    .card::before, .card::after { display: none; }
     .poster-wrapper img, .poster { width: 100%; height: auto; }
 
     /* Modal adjustments */
@@ -901,6 +1063,7 @@ main { padding-top: 90px; }
     .logo { font-size: 2.4rem; }
     .row-title { font-size: 1.4rem; }
     .card { width: 110px; }
+    .card-overlay { font-size: 0.7rem; padding: 16px 4px 4px; }
     .poster { height: 160px; }
     #search-input { font-size: 1rem; }
     body { font-size: 16px; }

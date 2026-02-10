@@ -478,12 +478,16 @@ async function loadHome() {
 
         container.innerHTML = '';
 
-        // 1. RecSys Row (only if user has real interactions — endpoint returns {source:'none'} when no interactions)
-        if(Array.isArray(recs) && recs.length > 0) createRow('For You', recs, 'mixed');
+        // 0. Continue Watching (from localStorage progress data)
+        const continueItems = getContinueWatchingItems();
+        if (continueItems.length > 0) createContinueWatchingRow(continueItems);
+
+        // 1. RecSys Row (only if user has real interactions)
+        if(Array.isArray(recs) && recs.length > 0) createRow('Based on Your Taste', recs, 'mixed');
 
         // 2. Trending
-        if(trendingMovies.length > 0) createRow('Based on Your Interests (Movies)', trendingMovies, 'movie');
-        if(trendingShows.length > 0) createRow('Based on Your Interests (Series)', trendingShows, 'tv');
+        if(trendingMovies.length > 0) createRow('Trending Now', trendingMovies, 'movie');
+        if(trendingShows.length > 0) createRow('Trending Series', trendingShows, 'tv');
 
         // 3. Top Rated then New
         if (moviesTop && moviesTop.length > 0) createRow('Top Rated', moviesTop, 'movie');
@@ -561,20 +565,22 @@ function createRow(title, items, fixedType=null, hasRegen=false) {
     const name = item.title || item.name;
     const imgSrc = item.poster_path && String(item.poster_path).toLowerCase() !== 'undefined' ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : 'https://via.placeholder.com/300x450';
         
-        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">`;
+        card.innerHTML = `<img src="${imgSrc}" class="poster" loading="lazy" alt="${name}"><div class="card-overlay">${name}</div>`;
         scroller.appendChild(card);
     });
 
-    // Arrows (scroll-aware visibility)
+    // Arrows (pirate compass style, scroll-aware visibility)
     const prevBtn = document.createElement('button');
     prevBtn.className = 'row-arrow prev';
-    prevBtn.innerHTML = '&#8249;';
-    prevBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: -1000, behavior: 'smooth' }); };
+    prevBtn.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
+    prevBtn.title = 'Sail Back';
+    prevBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: -800, behavior: 'smooth' }); };
     
     const nextBtn = document.createElement('button');
     nextBtn.className = 'row-arrow next';
-    nextBtn.innerHTML = '&#8250;';
-    nextBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: 1000, behavior: 'smooth' }); };
+    nextBtn.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
+    nextBtn.title = 'Sail Forward';
+    nextBtn.onclick = () => { SoundManager.play('wood'); scroller.scrollBy({ left: 800, behavior: 'smooth' }); };
 
     // Hide arrows when at start/end of scroll
     function updateArrowVisibility() {
@@ -759,9 +765,6 @@ function openModal(item, typeOverride=null) {
         // Cleanup old buttons/groups
         const oldGroup = document.getElementById('modal-actions');
         if(oldGroup) oldGroup.remove();
-        // Remove legacy like button if exists
-        const oldLike = playBtn.parentNode.querySelector('.pixel-btn:not(#play-btn)');
-        if(oldLike) oldLike.remove();
         
         playBtn.parentNode.insertBefore(btnGroup, playBtn.nextSibling);
     }
@@ -805,6 +808,9 @@ function openModal(item, typeOverride=null) {
         }).catch(() => {});
     })();
     
+    // Load trailer preview
+    loadTrailerPreview(currentTmdbId, type);
+    
     modal.classList.add('active');
 }
 
@@ -827,7 +833,13 @@ function addBadgeToRow(text) {
 
 function closeModal() { 
     document.getElementById('modal').classList.add('hidden'); 
-    closePlayer(); 
+    closePlayer();
+    // Clean up trailer
+    const tp = document.getElementById('trailer-preview');
+    if (tp) { tp.classList.add('hidden'); document.getElementById('trailer-iframe').src = 'about:blank'; }
+    // Hide download menu
+    const dd = document.getElementById('download-dropdown');
+    if (dd) dd.style.display = 'none';
 }
 function backdropClose(e) { if (e.target.id === 'modal') closeModal(); }
 /* demo video commit */
@@ -892,6 +904,9 @@ async function playVideo(type, tmdbId, season=1, episode=1) {
     
     // Hide Info, Show Player
     document.querySelector('.modal-header').classList.add('hidden');
+    // Stop trailer if playing
+    const tp = document.getElementById('trailer-preview');
+    if (tp) { tp.classList.add('hidden'); document.getElementById('trailer-iframe').src = 'about:blank'; }
     document.getElementById('player-wrapper').classList.remove('hidden');
 
     // Mark modal as player-open so CSS can expand the player area
@@ -1241,6 +1256,249 @@ function formatTime(seconds) {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// --- CONTINUE WATCHING ---
+function getContinueWatchingItems() {
+    const items = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith('nautilus_progress_')) continue;
+        try {
+            const data = JSON.parse(localStorage.getItem(key));
+            if (!data || !data.time || data.time < 30) continue; // Skip if <30s watched
+            if (data.percentage && data.percentage > 95) continue; // Already finished
+            // Parse type and tmdbId from key: nautilus_progress_{type}_{tmdbId}
+            const parts = key.replace('nautilus_progress_', '').split('_');
+            const type = parts[0]; // 'movie' or 'tv'
+            const tmdbId = parseInt(parts.slice(1).join('_'));
+            if (!tmdbId) continue;
+            items.push({ type, tmdbId, ...data });
+        } catch(e) { continue; }
+    }
+    // Sort by most recently updated first
+    items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return items.slice(0, 15);
+}
+
+async function createContinueWatchingRow(progressItems) {
+    const container = document.getElementById('content-area');
+    const section = document.createElement('section');
+    section.className = 'row-wrapper';
+    section.innerHTML = '<div class="row-title">Continue Watching</div>';
+    const scroller = document.createElement('div');
+    scroller.className = 'row-scroller';
+
+    // Fetch metadata for each item in parallel
+    const fetches = progressItems.map(p => 
+        fetch(`/media/${p.tmdbId}`).then(r => r.ok ? r.json() : null).catch(() => null)
+    );
+    const metaResults = await Promise.all(fetches);
+
+    let added = 0;
+    metaResults.forEach((meta, i) => {
+        if (!meta) return;
+        const p = progressItems[i];
+        const name = meta.title || meta.name || '?';
+        const poster = meta.poster_path;
+        if (!poster) return;
+        const imgSrc = `https://image.tmdb.org/t/p/w500${poster}`;
+        const pct = Math.min(Math.round(p.percentage || 0), 100);
+
+        const card = document.createElement('div');
+        card.className = 'card continue-card';
+        card.onclick = () => {
+            openModal(meta, p.type);
+            // Auto-play after a brief moment
+            setTimeout(() => {
+                if (p.type === 'tv' && p.season && p.episode) {
+                    playVideo('tv', p.tmdbId, p.season, p.episode);
+                } else {
+                    playVideo(p.type, p.tmdbId);
+                }
+            }, 600);
+        };
+
+        let epLabel = '';
+        if (p.type === 'tv' && p.season && p.episode) {
+            epLabel = `<div class="continue-ep">S${p.season} E${p.episode}</div>`;
+        }
+
+        card.innerHTML = `
+            <img src="${imgSrc}" class="poster" loading="lazy" alt="${name}">
+            <div class="card-overlay" style="opacity:1;transform:none;">
+                ${name}${epLabel}
+            </div>
+            <div class="continue-bar"><div class="continue-fill" style="width:${pct}%"></div></div>
+        `;
+        scroller.appendChild(card);
+        added++;
+    });
+
+    if (added === 0) return;
+    section.appendChild(scroller);
+    container.insertBefore(section, container.firstChild);
+}
+
+// --- TRAILER PREVIEW ---
+function loadTrailerPreview(tmdbId, mediaType) {
+    const container = document.getElementById('trailer-preview');
+    const iframe = document.getElementById('trailer-iframe');
+    container.classList.add('hidden');
+    iframe.src = 'about:blank';
+
+    fetch(`/media/${tmdbId}/trailer?media_type=${mediaType}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.key) {
+                iframe.src = `https://www.youtube.com/embed/${data.key}?rel=0&modestbranding=1`;
+                container.classList.remove('hidden');
+            }
+        })
+        .catch(() => {});
+}
+
+// --- DOWNLOAD BUTTON ---
+function toggleDownloadMenu() {
+    const dd = document.getElementById('download-dropdown');
+    if (dd.style.display === 'none') {
+        populateDownloadMenu();
+        dd.style.display = 'block';
+        // Close on outside click
+        setTimeout(() => {
+            document.addEventListener('click', closeDownloadMenuOutside);
+        }, 10);
+    } else {
+        dd.style.display = 'none';
+        document.removeEventListener('click', closeDownloadMenuOutside);
+    }
+}
+
+function closeDownloadMenuOutside(e) {
+    const wrapper = document.getElementById('download-wrapper');
+    if (!wrapper.contains(e.target)) {
+        document.getElementById('download-dropdown').style.display = 'none';
+        document.removeEventListener('click', closeDownloadMenuOutside);
+    }
+}
+
+function populateDownloadMenu() {
+    const dd = document.getElementById('download-dropdown');
+    const providers = ['VidSrc.to', 'VidSrc.pro', 'SuperEmbed', 'AutoEmbed'];
+    const type = currentType;
+    const id = currentTmdbId;
+
+    dd.innerHTML = '<div style="padding:6px 14px; font-size:0.8rem; color:var(--gold); border-bottom:1px solid rgba(139,115,85,0.3); font-weight:bold;"><i class="fa-solid fa-download"></i> Download via</div>';
+    providers.forEach(p => {
+        const a = document.createElement('a');
+        a.href = '#';
+        a.textContent = p;
+        a.onclick = (e) => {
+            e.preventDefault();
+            startDownloadVia(p);
+            dd.style.display = 'none';
+        };
+        dd.appendChild(a);
+    });
+}
+
+async function startDownloadVia(provider) {
+    try {
+        const apiUrl = `/play/${currentType}/${currentTmdbId}?season=${currentSeason}&episode=${currentEpisode}&provider=${provider}`;
+        const res = await fetch(apiUrl);
+        const data = await res.json();
+        if (data.url) {
+            // Open in new tab — for embed sources the user can use browser's save
+            window.open(data.url, '_blank');
+        } else {
+            alert('No download source available from this provider.');
+        }
+    } catch(e) {
+        alert('Download failed. Try another provider.');
+    }
+}
+
+// --- GENRE EXPLORE PAGE ---
+const GENRE_ICONS = {
+    28: '⚔️', 12: '🗺️', 16: '🎨', 35: '😂', 80: '🔪', 99: '📹',
+    18: '🎭', 10751: '👨‍👩‍👧‍👦', 14: '🧙', 36: '📜', 27: '👻', 10402: '🎵',
+    9648: '🔍', 10749: '💕', 878: '🚀', 10770: '📺', 53: '😰',
+    10752: '⚔️', 37: '🤠', 10759: '⚡', 10762: '🧒', 10763: '📰',
+    10764: '🏆', 10765: '👽', 10766: '💋', 10767: '🎙️', 10768: '🪖'
+};
+
+async function loadGenreExplore() {
+    setActiveNav('Genres');
+    const container = document.getElementById('content-area');
+    container.innerHTML = '<div style="padding:40px; text-align:center;">Charting the Seven Seas...</div>';
+    window.scrollTo(0, 0);
+
+    try {
+        const res = await fetch('/genres/overview');
+        const genres = await res.json();
+
+        container.innerHTML = '';
+        const header = document.createElement('div');
+        header.className = 'row-wrapper';
+        header.innerHTML = '<div class="row-title">Explore by Genre</div>';
+        container.appendChild(header);
+
+        const grid = document.createElement('div');
+        grid.className = 'genre-grid';
+        grid.style.padding = '0 1.5rem';
+
+        genres.forEach(g => {
+            const island = document.createElement('div');
+            island.className = 'genre-island';
+            const icon = GENRE_ICONS[g.id] || '🎬';
+            const total = (g.movies || 0) + (g.shows || 0);
+            island.innerHTML = `
+                <span class="genre-icon">${icon}</span>
+                ${g.name}
+                <div class="genre-count">${total} titles</div>
+            `;
+            island.onclick = () => loadGenreResults(g.id, g.name);
+            grid.appendChild(island);
+        });
+
+        container.appendChild(grid);
+    } catch(e) {
+        console.error(e);
+        container.innerHTML = '<div style="padding:40px; color:#f55;">Failed to load genres.</div>';
+    }
+}
+
+async function loadGenreResults(genreId, genreName) {
+    const container = document.getElementById('content-area');
+    container.innerHTML = '<div style="padding:40px; text-align:center;">Loading...</div>';
+    window.scrollTo(0, 0);
+
+    try {
+        const [moviesRes, showsRes] = await Promise.all([
+            fetch(`/movies/genre/${genreId}?limit=60`),
+            fetch(`/shows/genre/${genreId}?limit=40`)
+        ]);
+        const movies = await moviesRes.json();
+        const shows = await showsRes.json();
+
+        container.innerHTML = '';
+
+        // Back button
+        const backBar = document.createElement('div');
+        backBar.style.cssText = 'padding: 0.5rem 1.5rem;';
+        backBar.innerHTML = `<button class="pixel-btn" onclick="loadGenreExplore()" style="font-size:0.9rem;"><i class="fa-solid fa-arrow-left"></i> All Genres</button>`;
+        container.appendChild(backBar);
+
+        if (movies.length > 0) createRow(`${genreName} Movies`, movies, 'movie');
+        if (shows.length > 0) createRow(`${genreName} Series`, shows, 'tv');
+
+        if (movies.length === 0 && shows.length === 0) {
+            container.innerHTML += '<div style="padding:40px; text-align:center; color:#888;">No content found for this genre.</div>';
+        }
+    } catch(e) {
+        console.error(e);
+        container.innerHTML = '<div style="padding:40px; color:#f55;">Failed to load genre results.</div>';
+    }
 }
 
 // --- SETTINGS PANEL ---

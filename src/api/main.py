@@ -339,12 +339,100 @@ def get_genre_prediction(tmdb_id: int, db: Session = Depends(get_db)):
     
 @app.get("/related/{tmdb_id}")
 def get_related_movies(tmdb_id: int, db: Session = Depends(get_db)):
-    """Related items using genre Jaccard + normalized popularity (movies or shows)."""
+    """
+    Smart 'More Like This' using a 3-tier strategy:
+      1. TMDB collection (same franchise/universe — e.g. all MCU, all Harry Potter)
+      2. TMDB /recommendations + /similar (cast/crew/keyword overlap — near-perfect results)
+      3. Local genre Jaccard fallback (when TMDB API unavailable)
+    Results are cross-referenced with the local DB so every card is playable.
+    """
     movie = db.query(models.Movie).filter(models.Movie.tmdb_id == tmdb_id).first()
     show = db.query(models.TVShow).filter(models.TVShow.tmdb_id == tmdb_id).first()
+    is_tv = bool(show and not movie)
+    media_type = "tv" if is_tv else "movie"
 
-    # Resolve media type and candidates
-    if show and not movie:
+    # --- TIER 1 + 2: Use TMDB APIs ------------------------------------------
+    if TMDB_API_KEY:
+        tmdb_ids_seen = set()
+        ordered_results = []
+
+        try:
+            base_type = "tv" if is_tv else "movie"
+
+            # TIER 1: Collection / franchise (movies only — TV doesn't have collections)
+            if not is_tv:
+                detail_url = f"{TMDB_BASE_URL}/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+                detail = requests.get(detail_url, timeout=5).json()
+                collection = detail.get("belongs_to_collection")
+                if collection and collection.get("id"):
+                    coll_url = f"{TMDB_BASE_URL}/collection/{collection['id']}?api_key={TMDB_API_KEY}&language=en-US"
+                    coll_data = requests.get(coll_url, timeout=5).json()
+                    for part in coll_data.get("parts", []):
+                        pid = part.get("id")
+                        if pid and pid != tmdb_id and pid not in tmdb_ids_seen:
+                            tmdb_ids_seen.add(pid)
+                            # Try to find in local DB first
+                            local = db.query(models.Movie).filter(models.Movie.tmdb_id == pid).first()
+                            if local:
+                                ordered_results.append(dict(jsonable_encoder(local), media_type="movie"))
+                            else:
+                                # Use TMDB data directly so the card renders (poster, title)
+                                ordered_results.append({
+                                    "tmdb_id": pid, "title": part.get("title", ""),
+                                    "poster_path": part.get("poster_path"),
+                                    "overview": part.get("overview", ""),
+                                    "release_date": part.get("release_date", ""),
+                                    "media_type": "movie",
+                                    "popularity_score": part.get("popularity", 0),
+                                })
+
+            # TIER 2: TMDB recommendations + similar
+            for endpoint in ["recommendations", "similar"]:
+                if len(ordered_results) >= 12:
+                    break
+                rec_url = f"{TMDB_BASE_URL}/{base_type}/{tmdb_id}/{endpoint}?api_key={TMDB_API_KEY}&language=en-US&page=1"
+                rec_data = requests.get(rec_url, timeout=5).json()
+                for item in rec_data.get("results", [])[:15]:
+                    iid = item.get("id")
+                    if not iid or iid in tmdb_ids_seen or iid == tmdb_id:
+                        continue
+                    tmdb_ids_seen.add(iid)
+                    if is_tv:
+                        local = db.query(models.TVShow).filter(models.TVShow.tmdb_id == iid).first()
+                        if local:
+                            ordered_results.append(dict(jsonable_encoder(local), media_type="tv"))
+                        else:
+                            ordered_results.append({
+                                "tmdb_id": iid, "name": item.get("name", ""),
+                                "poster_path": item.get("poster_path"),
+                                "overview": item.get("overview", ""),
+                                "first_air_date": item.get("first_air_date", ""),
+                                "media_type": "tv",
+                                "popularity_score": item.get("popularity", 0),
+                            })
+                    else:
+                        local = db.query(models.Movie).filter(models.Movie.tmdb_id == iid).first()
+                        if local:
+                            ordered_results.append(dict(jsonable_encoder(local), media_type="movie"))
+                        else:
+                            ordered_results.append({
+                                "tmdb_id": iid, "title": item.get("title", ""),
+                                "poster_path": item.get("poster_path"),
+                                "overview": item.get("overview", ""),
+                                "release_date": item.get("release_date", ""),
+                                "media_type": "movie",
+                                "popularity_score": item.get("popularity", 0),
+                            })
+                    if len(ordered_results) >= 12:
+                        break
+
+            if ordered_results:
+                return ordered_results[:12]
+        except Exception as e:
+            print(f"TMDB related lookup failed: {e}")
+
+    # --- TIER 3: Local genre Jaccard fallback --------------------------------
+    if is_tv and show:
         src_genres = genre_id_set(show.genres)
         max_pop = db.query(func.max(models.TVShow.popularity_score)).scalar() or 1
         candidates = db.query(models.TVShow).filter(models.TVShow.id != show.id, models.TVShow.popularity_score.isnot(None)).limit(600).all()
@@ -359,11 +447,7 @@ def get_related_movies(tmdb_id: int, db: Session = Depends(get_db)):
             hybrid = 0.7 * j + 0.3 * pop_norm
             scored.append((cand, hybrid))
         scored.sort(key=lambda x: x[1], reverse=True)
-        top = [dict(jsonable_encoder(s[0]), media_type="tv") for s in scored[:10]]
-        if not top:
-            fallback = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(10).all()
-            top = [dict(jsonable_encoder(s), media_type="tv") for s in fallback]
-        return top
+        return [dict(jsonable_encoder(s[0]), media_type="tv") for s in scored[:10]]
 
     if movie:
         src_genres = genre_id_set(movie.genres)
@@ -378,13 +462,8 @@ def get_related_movies(tmdb_id: int, db: Session = Depends(get_db)):
             hybrid = 0.7 * j + 0.3 * pop_norm
             scored.append((cand, hybrid))
         scored.sort(key=lambda x: x[1], reverse=True)
-        top = [dict(jsonable_encoder(s[0]), media_type="movie") for s in scored[:10]]
-        if not top:
-            fallback = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(10).all()
-            top = [dict(jsonable_encoder(m), media_type="movie") for m in fallback]
-        return top
+        return [dict(jsonable_encoder(s[0]), media_type="movie") for s in scored[:10]]
 
-    # If nothing found, return popular movies as generic related
     popular = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(10).all()
     return [dict(jsonable_encoder(m), media_type="movie") for m in popular]
 
@@ -1084,7 +1163,6 @@ def get_random_movies(limit: int = 20, db: Session = Depends(get_db)):
 @app.get("/movies/genre/{genre_id}")
 def get_movies_by_genre(genre_id: int, limit: int = 20, db: Session = Depends(get_db)):
     # Fetch popular movies and filter by genre in Python
-    # This avoids DB-specific JSON query syntax issues
     candidates = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(500).all()
     filtered = []
     for movie in candidates:
@@ -1093,6 +1171,26 @@ def get_movies_by_genre(genre_id: int, limit: int = 20, db: Session = Depends(ge
             filtered.append(movie)
         if len(filtered) >= limit:
             break
+
+    # Fallback: use TMDB discover API if DB returned nothing
+    if not filtered and TMDB_API_KEY:
+        try:
+            url = f"{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres={genre_id}&sort_by=popularity.desc&page=1&language=en-US"
+            resp = requests.get(url, timeout=8)
+            if resp.status_code == 200:
+                for item in resp.json().get("results", [])[:limit]:
+                    filtered.append({
+                        "tmdb_id": item.get("id"),
+                        "title": item.get("title", ""),
+                        "poster_path": item.get("poster_path"),
+                        "overview": item.get("overview", ""),
+                        "release_date": item.get("release_date", ""),
+                        "popularity_score": item.get("popularity", 0),
+                        "media_type": "movie"
+                    })
+        except Exception as e:
+            print(f"TMDB discover movie fallback error: {e}")
+
     return filtered
 
 @app.get("/movies/desi")
@@ -1224,6 +1322,134 @@ def get_media_details(tmdb_id: int, db: Session = Depends(get_db)):
         pass
 
     return {}
+
+
+@app.get("/media/{tmdb_id}/trailer")
+def get_trailer(tmdb_id: int, media_type: str = "movie"):
+    """Return YouTube trailer key for a movie or TV show via TMDB /videos endpoint."""
+    if not TMDB_API_KEY:
+        return {"key": None}
+
+    base = "tv" if media_type == "tv" else "movie"
+    try:
+        url = f"{TMDB_BASE_URL}/{base}/{tmdb_id}/videos?api_key={TMDB_API_KEY}&language=en-US"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code != 200:
+            return {"key": None}
+        results = resp.json().get("results", [])
+        # Prefer official trailers, then teasers, then any video on YouTube
+        yt = [v for v in results if v.get("site") == "YouTube"]
+        official = [v for v in yt if v.get("type") == "Trailer" and v.get("official")]
+        trailers = [v for v in yt if v.get("type") == "Trailer"]
+        teasers = [v for v in yt if v.get("type") == "Teaser"]
+        pick = (official or trailers or teasers or yt)
+        if pick:
+            return {"key": pick[0]["key"], "name": pick[0].get("name", "Trailer")}
+    except Exception:
+        pass
+
+    # If movie not found, try TV (sometimes tmdb_id could be either)
+    if base == "movie":
+        try:
+            url2 = f"{TMDB_BASE_URL}/tv/{tmdb_id}/videos?api_key={TMDB_API_KEY}&language=en-US"
+            resp2 = requests.get(url2, timeout=5)
+            if resp2.status_code == 200:
+                results2 = resp2.json().get("results", [])
+                yt2 = [v for v in results2 if v.get("site") == "YouTube"]
+                pick2 = [v for v in yt2 if v.get("type") == "Trailer"] or yt2
+                if pick2:
+                    return {"key": pick2[0]["key"], "name": pick2[0].get("name", "Trailer")}
+        except Exception:
+            pass
+
+    return {"key": None}
+
+
+# TV genre map (TMDB TV genres that differ from movie genres)
+TMDB_TV_GENRE_MAP = {
+    10759: "Action & Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
+    99: "Documentary", 18: "Drama", 10751: "Family", 10762: "Kids",
+    9648: "Mystery", 10763: "News", 10764: "Reality", 878: "Sci-Fi & Fantasy",
+    10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics",
+    37: "Western"
+}
+
+@app.get("/genres/overview")
+def get_genre_overview(db: Session = Depends(get_db)):
+    """Return genre list for the Genre Explore page.
+    First tries to count from DB. If DB has no genre data, returns
+    the static TMDB genre map so the explore page always works."""
+    all_movies = db.query(models.Movie).order_by(models.Movie.popularity_score.desc()).limit(2000).all()
+    all_shows = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(500).all()
+    counts = {}  # genre_id -> {id, name, movies, shows}
+    for m in all_movies:
+        for g in normalize_genres(m.genres):
+            gid = g.get("id")
+            if gid is None:
+                continue
+            if gid not in counts:
+                counts[gid] = {"id": gid, "name": g["name"], "movies": 0, "shows": 0}
+            counts[gid]["movies"] += 1
+    for s in all_shows:
+        for g in normalize_genres(s.genres):
+            gid = g.get("id")
+            if gid is None:
+                continue
+            if gid not in counts:
+                counts[gid] = {"id": gid, "name": g["name"], "movies": 0, "shows": 0}
+            counts[gid]["shows"] += 1
+
+    # If DB has genre data, return it sorted
+    if counts:
+        result = sorted(counts.values(), key=lambda x: x["movies"] + x["shows"], reverse=True)
+        return result
+
+    # Fallback: return static genre map (DB genres are empty)
+    static_genres = []
+    for gid, name in TMDB_GENRE_MAP.items():
+        static_genres.append({"id": gid, "name": name, "movies": 0, "shows": 0})
+    # Add TV-specific genres not already covered
+    seen_ids = {g["id"] for g in static_genres}
+    for gid, name in TMDB_TV_GENRE_MAP.items():
+        if gid not in seen_ids:
+            static_genres.append({"id": gid, "name": name, "movies": 0, "shows": 0})
+    return static_genres
+
+
+@app.get("/shows/genre/{genre_id}")
+def get_shows_by_genre(genre_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    """Return TV shows matching a genre ID."""
+    candidates = db.query(models.TVShow).order_by(models.TVShow.popularity_score.desc()).limit(500).all()
+    filtered = []
+    for show in candidates:
+        norm = normalize_genres(show.genres)
+        if any(g.get("id") == genre_id for g in norm):
+            filtered.append(show)
+        if len(filtered) >= limit:
+            break
+
+    # Fallback: use TMDB discover API if DB returned nothing
+    if not filtered and TMDB_API_KEY:
+        try:
+            url = f"{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_genres={genre_id}&sort_by=popularity.desc&page=1&language=en-US"
+            resp = requests.get(url, timeout=8)
+            if resp.status_code == 200:
+                for item in resp.json().get("results", [])[:limit]:
+                    filtered.append({
+                        "tmdb_id": item.get("id"),
+                        "name": item.get("name", ""),
+                        "title": item.get("name", ""),
+                        "poster_path": item.get("poster_path"),
+                        "overview": item.get("overview", ""),
+                        "first_air_date": item.get("first_air_date", ""),
+                        "popularity_score": item.get("popularity", 0),
+                        "media_type": "tv"
+                    })
+        except Exception as e:
+            print(f"TMDB discover tv fallback error: {e}")
+
+    return filtered
+
 
 @app.post("/interact")
 def record_interaction(input_data: InteractionInput, db: Session = Depends(get_db)):
@@ -1432,34 +1658,52 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
         show_candidates_q = show_candidates_q.filter(models.TVShow.id.notin_(liked_tv_ids))
     show_candidates = show_candidates_q.limit(300).all()
 
-    scored_candidates = []
+    # --- SCORING: Jaccard similarity + popularity boost ---
+    max_movie_pop = db.query(func.max(models.Movie.popularity_score)).scalar() or 1
+    max_show_pop = db.query(func.max(models.TVShow.popularity_score)).scalar() or 1
+
+    def _score_candidate(cand, media_kind):
+        cand_genres = []
+        if cand.genres and isinstance(cand.genres, list):
+            cand_genres = cand.genres
+        elif cand.genres and isinstance(cand.genres, dict):
+            cand_genres = list(cand.genres.keys())
+        cand_set = set(cand_genres)
+        inter = cand_set & target_genres
+        union = cand_set | target_genres
+        jaccard = (len(inter) / len(union)) if union else 0
+        if jaccard == 0:
+            return None  # No genre overlap at all
+        max_pop = max_movie_pop if media_kind == 'movie' else max_show_pop
+        pop_norm = min((cand.popularity_score or 0) / max_pop, 1.0)
+        # 60% genre relevance + 40% popularity (quality signal)
+        hybrid = 0.6 * jaccard + 0.4 * pop_norm
+        return hybrid
+
+    scored_movies = []
     for cand in movie_candidates:
-        score = 0
-        cand_genres = []
-        if cand.genres and isinstance(cand.genres, list):
-            cand_genres = cand.genres
-        elif cand.genres and isinstance(cand.genres, dict):
-            cand_genres = list(cand.genres.keys())
-            
-        intersection = len(set(cand_genres) & target_genres)
-        if intersection > 0:
-            score = intersection
-            scored_candidates.append((cand, score, 'movie'))
+        s = _score_candidate(cand, 'movie')
+        if s is not None:
+            scored_movies.append((cand, s, 'movie'))
+    scored_movies.sort(key=lambda x: x[1], reverse=True)
 
-    # Score TV show candidates too
+    scored_shows = []
     for cand in show_candidates:
-        cand_genres = []
-        if cand.genres and isinstance(cand.genres, list):
-            cand_genres = cand.genres
-        elif cand.genres and isinstance(cand.genres, dict):
-            cand_genres = list(cand.genres.keys())
+        s = _score_candidate(cand, 'tv')
+        if s is not None:
+            scored_shows.append((cand, s, 'tv'))
+    scored_shows.sort(key=lambda x: x[1], reverse=True)
 
-        intersection = len(set(cand_genres) & target_genres)
-        if intersection > 0:
-            scored_candidates.append((cand, intersection, 'tv'))
-            
-    # Sort by score
-    scored_candidates.sort(key=lambda x: x[1], reverse=True)
+    # Interleave movies and shows for diversity (2 movies : 1 show ratio)
+    final = []
+    mi, si = 0, 0
+    while len(final) < 18 and (mi < len(scored_movies) or si < len(scored_shows)):
+        # Pick 2 movies then 1 show
+        for _ in range(2):
+            if mi < len(scored_movies):
+                final.append(scored_movies[mi]); mi += 1
+        if si < len(scored_shows):
+            final.append(scored_shows[si]); si += 1
     
     # Before returning content-based results, try to use the NCF model if available
     try:
@@ -1503,8 +1747,8 @@ def get_guest_recommendations(guest_id: str, request: Request, db: Session = Dep
         # NCF path failed; fall back to content-based
         print(f"Guest NCF attempt failed: {e}")
 
-    # Return top 12 content-based candidates (mixed movies + shows)
-    return [_serialize_rec(x[0], x[2]) for x in scored_candidates[:12]]
+    # Return top 12 content-based candidates (mixed movies + shows, interleaved)
+    return [_serialize_rec(x[0], x[2]) for x in final[:12]]
 
 # --- USER INTERACTIONS (Guest/Watchlist) ---
 

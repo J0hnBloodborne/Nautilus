@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 Jinja2
 SQLAlchemy
 psycopg2-binary
@@ -16,3 +16,7 @@ python-json-logger
 pytest
 ruff
 python-multipart
+joblib
+scikit-learn
+torch
+aiohttp
