@@ -235,6 +235,7 @@ class ProviderEngine:
 def _load_scrapers():
     # ── Sources (31) ──
     from .sources import flix2day       # noqa: F401  rank 500 — RELIABLE (flix2day AES decrypt)
+    from .sources import vidplus        # noqa: F401  rank 450 — RELIABLE (vidplus.to AES decrypt, multi-quality)
     from .sources import moviesapi      # noqa: F401  rank 400 — RELIABLE (vidora HLS)
     from .sources import vidlink        # noqa: F401  rank 350 — RELIABLE
     from .sources import whvx           # noqa: F401  rank 300

@@ -617,7 +617,10 @@ async def hunt_all_streams(media_type: str, tmdb_id: int, season: int = 1, episo
     year = 0
     genres = []
     original_language = ""
-    item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    try:
+        item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    except Exception:
+        item = None  # DB may be offline — not critical for streaming
     if item:
         title = item.title or ""
         imdb_id = getattr(item, "imdb_id", None)
@@ -760,6 +763,36 @@ async def proxy_stream_options():
             "Access-Control-Max-Age": "86400",
         },
     )
+
+@app.get("/proxy_subtitle")
+async def proxy_subtitle(url: str):
+    """Proxy subtitle files to avoid CORS issues. Returns raw subtitle text."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            r = await client.get(url, headers=headers)
+            content = r.content
+            # Try to decode as text
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    text = content.decode("latin-1")
+                except Exception:
+                    text = content.decode("utf-8", errors="replace")
+            return Response(
+                content=text,
+                media_type="text/plain; charset=utf-8",
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Cache-Control": "public, max-age=86400",
+                },
+            )
+    except Exception as e:
+        logging.error(f"[proxy_subtitle] Failed to fetch {url}: {e}")
+        return Response(content=f"Subtitle fetch error: {e}", status_code=502,
+                        headers={"Access-Control-Allow-Origin": "*"})
 
 @app.post("/users/avatar")
 async def upload_avatar(file: UploadFile = File(...)):

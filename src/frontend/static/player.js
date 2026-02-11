@@ -20,12 +20,57 @@ function setPlayerPrefs(updates) {
     return prefs;
 }
 
-// ─── Subtitle Parser (SRT/VTT → cue array) ───
+// ─── Subtitle Parser (SRT/VTT/MicroDVD/ASS → cue array) ───
 function parseSubtitles(text) {
     if (!text) return [];
-    const cues = [];
     // Normalize line endings
-    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const trimmed = text.trim();
+
+    // Detect MicroDVD format: lines like {start_frame}{end_frame}text
+    if (/^\{\d+\}\{\d+\}/.test(trimmed)) {
+        return _parseMicroDVD(trimmed);
+    }
+    // Detect ASS/SSA format
+    if (trimmed.startsWith('[Script Info]') || trimmed.includes('Format:') && trimmed.includes('Dialogue:')) {
+        return _parseASS(trimmed);
+    }
+    // Standard SRT/VTT parsing
+    return _parseSrtVtt(trimmed);
+}
+
+function _parseMicroDVD(text) {
+    const cues = [];
+    const fps = 23.976; // Standard film framerate
+    const lines = text.split('\n');
+    for (const line of lines) {
+        const m = line.match(/^\{(\d+)\}\{(\d+)\}(.+)/);
+        if (!m) continue;
+        const start = parseInt(m[1]) / fps;
+        const end = parseInt(m[2]) / fps;
+        let txt = m[3].replace(/\|/g, '\n').replace(/\{[^}]*\}/g, '').trim();
+        if (txt) cues.push({ start, end, text: txt });
+    }
+    return cues;
+}
+
+function _parseASS(text) {
+    const cues = [];
+    const lines = text.split('\n');
+    for (const line of lines) {
+        const m = line.match(/^Dialogue:\s*\d+,(\d+):(\d{2}):(\d{2})\.(\d{2}),(\d+):(\d{2}):(\d{2})\.(\d{2}),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),(.*)/);
+        if (!m) continue;
+        const start = parseInt(m[1])*3600 + parseInt(m[2])*60 + parseInt(m[3]) + parseInt(m[4])/100;
+        const end = parseInt(m[5])*3600 + parseInt(m[6])*60 + parseInt(m[7]) + parseInt(m[8])/100;
+        let txt = m[m.length-1].replace(/\{[^}]*\}/g, '').replace(/\\N/g, '\n').replace(/\\n/g, '\n').trim();
+        if (txt) cues.push({ start, end, text: txt });
+    }
+    return cues;
+}
+
+function _parseSrtVtt(text) {
+    const cues = [];
+    const lines = text.split('\n');
     let i = 0;
     // Skip WebVTT header
     if (lines[0] && lines[0].trim().startsWith('WEBVTT')) {
@@ -467,6 +512,17 @@ class NautilusPlayer {
             this.hls.attachMedia(this.video);
             this.hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
                 console.log(`[Player] HLS manifest parsed: ${data.levels.length} quality levels`);
+                // Apply preferred quality if set
+                if (this.preferredQuality !== 'auto' && data.levels.length > 0) {
+                    const prefH = parseInt(this.preferredQuality);
+                    if (prefH) {
+                        const idx = data.levels.findIndex(l => l.height === prefH);
+                        if (idx >= 0) {
+                            this.hls.currentLevel = idx;
+                            console.log(`[Player] Set preferred quality: ${prefH}p (level ${idx})`);
+                        }
+                    }
+                }
                 this.video.play().catch(() => {});
             });
             this.hls.on(Hls.Events.ERROR, (e, data) => {
@@ -564,9 +620,20 @@ class NautilusPlayer {
     // ─── Subtitle Loading ───
     async _loadSubtitleTrack(caption) {
         try {
-            const resp = await fetch(caption.url);
+            // Proxy all subtitle URLs through our server to avoid CORS
+            let fetchUrl = caption.url;
+            if (fetchUrl && !fetchUrl.startsWith('/')) {
+                fetchUrl = `/proxy_subtitle?url=${encodeURIComponent(caption.url)}`;
+            }
+            const resp = await fetch(fetchUrl);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const text = await resp.text();
             this.cues = parseSubtitles(text);
+            if (this.cues.length === 0) {
+                console.warn('[Player] Subtitle parsed but 0 cues, raw length:', text.length);
+            } else {
+                console.log(`[Player] Loaded ${this.cues.length} subtitle cues for ${caption.lang}`);
+            }
             this._activeCaption = caption;
             this.ccBtn.classList.add('active');
         } catch (e) {
@@ -742,8 +809,19 @@ class NautilusPlayer {
     }
 
     _renderSettingsMain() {
-        const qualLabel = this.preferredQuality === 'auto' ? 'Auto' : this.preferredQuality + 'p';
-        const subLabel = this._activeCaption ? this._activeCaption.lang.toUpperCase() : 'Off';
+        // Quality label
+        let qualLabel = 'Auto';
+        if (this.hls && this.hls.levels && this.hls.levels.length > 0) {
+            if (this.hls.autoLevelEnabled || this.hls.currentLevel === -1) {
+                const autoLevel = this.hls.currentLevel >= 0 ? this.hls.levels[this.hls.currentLevel]?.height : null;
+                qualLabel = autoLevel ? `Auto (${autoLevel}p)` : 'Auto';
+            } else if (this.hls.currentLevel >= 0) {
+                qualLabel = this.hls.levels[this.hls.currentLevel]?.height + 'p' || '?';
+            }
+        } else if (this._currentFileQuality) {
+            qualLabel = this._currentFileQuality === 'unknown' ? 'Auto' : this._currentFileQuality + 'p';
+        }
+        const subLabel = this._activeCaption ? (this._activeCaption.lang || 'On').toUpperCase() : 'Off';
         this.settingsPanel.innerHTML = `
             <div class="naut-settings-item" data-action="quality">
                 <span><i class="fa-solid fa-signal" style="margin-right:8px;opacity:0.5"></i> Quality</span>
@@ -779,13 +857,27 @@ class NautilusPlayer {
     _renderQualityMenu() {
         let items = '';
 
-        if (this.hls && this.hls.levels && this.hls.levels.length > 1) {
-            // HLS quality
-            const isAuto = this.hls.currentLevel === -1;
-            items += `<div class="naut-settings-item ${isAuto ? 'selected' : ''}" data-q="-1">Auto</div>`;
+        if (this.hls && this.hls.levels && this.hls.levels.length > 0) {
+            // HLS quality levels
+            const currentLevel = this.hls.currentLevel;
+            const autoEnabled = this.hls.autoLevelEnabled;
+            // Always show Auto option
+            items += `<div class="naut-settings-item ${autoEnabled ? 'selected' : ''}" data-q="-1">
+                <span>Auto</span>
+                ${autoEnabled && this.hls.currentLevel >= 0 ? `<span class="quality-auto-hint">${this.hls.levels[this.hls.currentLevel]?.height || '?'}p</span>` : ''}
+            </div>`;
+            // Deduplicate levels by height and sort descending
+            const seen = new Set();
+            const uniqueLevels = [];
             this.hls.levels.forEach((level, idx) => {
-                const sel = this.hls.currentLevel === idx ? 'selected' : '';
-                items += `<div class="naut-settings-item ${sel}" data-q="${idx}">${level.height}p</div>`;
+                const h = level.height || 0;
+                if (!seen.has(h)) { seen.add(h); uniqueLevels.push({ level, idx, height: h }); }
+            });
+            uniqueLevels.sort((a, b) => b.height - a.height);
+            uniqueLevels.forEach(({ level, idx, height }) => {
+                const sel = !autoEnabled && currentLevel === idx ? 'selected' : '';
+                const bitrate = level.bitrate ? ` <span style="opacity:0.4;font-size:0.8em">${(level.bitrate/1000000).toFixed(1)}Mbps</span>` : '';
+                items += `<div class="naut-settings-item ${sel}" data-q="${idx}">${height}p${bitrate}</div>`;
             });
         } else if (this._fileQualities && this._fileQualities.length > 0) {
             // File quality
@@ -809,8 +901,17 @@ class NautilusPlayer {
         this.settingsPanel.querySelectorAll('[data-q]').forEach(el => {
             el.addEventListener('click', () => {
                 const level = parseInt(el.dataset.q);
-                this.hls.currentLevel = level;
-                this.preferredQuality = level === -1 ? 'auto' : this.hls.levels[level].height.toString();
+                if (level === -1) {
+                    // Auto: let HLS.js pick
+                    this.hls.currentLevel = -1;
+                    this.hls.nextLevel = -1;
+                    this.preferredQuality = 'auto';
+                } else {
+                    // Manual: lock to specific level
+                    this.hls.currentLevel = level;
+                    this.hls.nextLevel = level;
+                    this.preferredQuality = this.hls.levels[level]?.height?.toString() || 'auto';
+                }
                 setPlayerPrefs({ preferredQuality: this.preferredQuality });
                 this._renderQualityMenu();
             });
@@ -844,11 +945,37 @@ class NautilusPlayer {
     _renderSubtitleMenu() {
         const caps = this._availableCaptions || [];
         const offSel = !this._activeCaption ? 'selected' : '';
+        
+        // Deduplicate captions by language (keep first of each)
+        const langMap = new Map();
+        const deduped = [];
+        for (const c of caps) {
+            const key = c.lang || 'unknown';
+            if (!langMap.has(key)) {
+                langMap.set(key, deduped.length);
+                deduped.push(c);
+            }
+        }
+        
+        // Language code to display name map
+        const langNames = {
+            en: 'English', es: 'Spanish', fr: 'French', de: 'German',
+            it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese',
+            ko: 'Korean', zh: 'Chinese', ar: 'Arabic', tr: 'Turkish',
+            nl: 'Dutch', pl: 'Polish', cs: 'Czech', sv: 'Swedish',
+            da: 'Danish', fi: 'Finnish', no: 'Norwegian', hu: 'Hungarian',
+            ro: 'Romanian', hr: 'Croatian', el: 'Greek', he: 'Hebrew',
+            th: 'Thai', id: 'Indonesian', vi: 'Vietnamese', hi: 'Hindi',
+            bg: 'Bulgarian', sr: 'Serbian', sl: 'Slovenian', sk: 'Slovak',
+            ms: 'Malay', bn: 'Bengali', is: 'Icelandic',
+        };
+        
         let items = `<div class="naut-settings-item ${offSel}" data-sub="off">Off</div>`;
-        caps.forEach((c, idx) => {
+        deduped.forEach((c, idx) => {
             const sel = this._activeCaption === c ? 'selected' : '';
-            const label = (c.lang || 'Sub').toUpperCase();
-            items += `<div class="naut-settings-item ${sel}" data-sub="${idx}">${label}</div>`;
+            const code = (c.lang || 'unknown').toLowerCase();
+            const label = langNames[code] || code.toUpperCase();
+            items += `<div class="naut-settings-item ${sel}" data-sub="${caps.indexOf(c)}">${label}</div>`;
         });
 
         this.settingsPanel.innerHTML = `
