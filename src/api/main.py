@@ -543,7 +543,10 @@ async def stream_content(media_type: str, tmdb_id: int, season: int = 1, episode
     year = 0
     genres = []
     original_language = ""
-    item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    try:
+        item = db.query(models.Movie if media_type == "movie" else models.TVShow).filter_by(tmdb_id=tmdb_id).first()
+    except Exception:
+        item = None  # DB may be offline — not critical for streaming
     if item:
         title = item.title or ""
         imdb_id = getattr(item, "imdb_id", None)
@@ -595,11 +598,7 @@ async def stream_content(media_type: str, tmdb_id: int, season: int = 1, episode
     if result:
         return result.to_dict()
 
-    # Fallback to legacy embed scraper
-    scraper = UniversalScraper()
-    legacy = await scraper.get_stream(tmdb_id, media_type, season, episode)
-    if legacy:
-        return legacy
+    # No direct HLS/MP4 stream found from any provider
     return {"error": "No streams found", "stream": None}
 
 @app.get("/stream/providers")
@@ -667,49 +666,100 @@ async def proxy_stream(url: str, request: Request, referer: str = None, origin: 
     if origin:
         headers["Origin"] = origin
 
-    is_manifest = url.split("?")[0].endswith((".m3u8", ".m3u"))
+    def _make_proxy_url(raw_url: str) -> str:
+        """Build a /proxy_stream URL preserving referer/origin."""
+        abs_url = urljoin(url, raw_url)
+        pp = {"url": abs_url}
+        if referer: pp["referer"] = referer
+        if origin:  pp["origin"] = origin
+        return f"/proxy_stream?{urlencode(pp)}"
+
+    def _rewrite_uri_attr(line_text: str) -> str:
+        """Rewrite all URI=\"...\" attributes in an HLS tag line."""
+        def _replace(m):
+            return f'URI="{_make_proxy_url(m.group(1))}"'
+        return _re.sub(r'URI="([^"]+)"', _replace, line_text)
+
+    # Detect manifest by extension OR by fetching and checking content
+    is_manifest_ext = url.split("?")[0].rstrip("/").endswith((".m3u8", ".m3u"))
+
+    # Always fetch first to check — some APIs serve m3u8 at non-.m3u8 URLs
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            if is_manifest_ext:
+                # Known manifest — fetch fully
+                r = await client.get(url, headers=headers)
+            else:
+                # Unknown — stream but peek at content-type
+                r = await client.get(url, headers=headers)
+    except Exception as e:
+        logging.error(f"[proxy_stream] Failed to fetch {url}: {e}")
+        return Response(content=f"Proxy fetch error: {e}", status_code=502,
+                        headers={"Access-Control-Allow-Origin": "*"})
+
+    content_type = r.headers.get("content-type", "").lower()
+    is_manifest = is_manifest_ext or \
+        "mpegurl" in content_type or \
+        "x-mpegurl" in content_type or \
+        (r.text.strip().startswith("#EXTM3U") if content_type.startswith("text") or not content_type else False)
 
     if is_manifest:
-        # Fetch fully to rewrite URLs
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            r = await client.get(url, headers=headers)
-        content_type = r.headers.get("content-type", "")
-        text = r.text
+        try:
+            text = r.text
+        except Exception:
+            text = r.content.decode("utf-8", errors="replace")
+
         lines = text.split("\n")
         rewritten = []
         for line in lines:
             stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                abs_url = urljoin(url, stripped)
-                proxy_params = {"url": abs_url}
-                if referer: proxy_params["referer"] = referer
-                if origin:  proxy_params["origin"] = origin
-                rewritten.append(f"/proxy_stream?{urlencode(proxy_params)}")
-            elif stripped.startswith("#EXT-X-MAP:") and 'URI="' in stripped:
-                def _rewrite_uri(m):
-                    raw = m.group(1)
-                    abs_url = urljoin(url, raw)
-                    pp = {"url": abs_url}
-                    if referer: pp["referer"] = referer
-                    if origin:  pp["origin"] = origin
-                    return f'URI="/proxy_stream?{urlencode(pp)}"'
-                rewritten.append(_re.sub(r'URI="([^"]+)"', _rewrite_uri, stripped))
+            if not stripped:
+                rewritten.append(line)
+            elif not stripped.startswith("#"):
+                # Segment or variant playlist URL
+                rewritten.append(_make_proxy_url(stripped))
+            elif 'URI="' in stripped:
+                # Rewrite URI= in ANY HLS tag:
+                # #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA, #EXT-X-SESSION-KEY,
+                # #EXT-X-I-FRAME-STREAM-INF, etc.
+                rewritten.append(_rewrite_uri_attr(stripped))
             else:
                 rewritten.append(line)
         return Response(content="\n".join(rewritten), media_type="application/vnd.apple.mpegurl",
-                        headers={"Access-Control-Allow-Origin": "*"})
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Headers": "*",
+                            "Cache-Control": "no-cache",
+                        })
     else:
-        # Stream binary segments through
-        client = httpx.AsyncClient(follow_redirects=True)
-        req = client.build_request("GET", url, headers=headers)
-        r = await client.send(req, stream=True)
-        resp_headers = {"Access-Control-Allow-Origin": "*"}
+        # Binary segment / non-manifest — stream through with CORS headers
+        resp_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
         ct = r.headers.get("content-type")
-        return StreamingResponse(
-            r.aiter_bytes(), status_code=r.status_code,
-            media_type=ct, headers=resp_headers,
-            background=client.aclose
+        cl = r.headers.get("content-length")
+        if cl:
+            resp_headers["Content-Length"] = cl
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type=ct,
+            headers=resp_headers,
         )
+
+@app.options("/proxy_stream")
+async def proxy_stream_options():
+    """Handle CORS preflight for proxy requests."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400",
+        },
+    )
 
 @app.post("/users/avatar")
 async def upload_avatar(file: UploadFile = File(...)):

@@ -334,7 +334,7 @@ class NautilusPlayer {
         this.loadingEl.innerHTML = '<div class="naut-spinner"></div>';
         this.loadingEl.classList.add('visible');
 
-        // Timeout: if nothing loads within 15s, try next source
+        // Timeout: if nothing loads within 20s, try next source
         clearTimeout(this._loadTimeout);
         this._loadTimeout = setTimeout(() => {
             if (this.loadingEl.classList.contains('visible') && !this.isPlaying) {
@@ -342,12 +342,18 @@ class NautilusPlayer {
                 if (this.hls) { this.hls.destroy(); this.hls = null; }
                 this._tryNextSource();
             }
-        }, 15000);
+        }, 20000);
+
+        console.log(`[Player] Loading ${stream.type} stream from ${label}`, stream.playlist || stream.qualities);
 
         if (stream.type === 'hls' && stream.playlist) {
             this._loadHLS(stream);
         } else if (stream.type === 'file' && stream.qualities?.length) {
             this._loadFile(stream);
+        } else {
+            console.warn('[Player] Unknown/invalid stream type:', stream.type, stream);
+            this._tryNextSource();
+            return;
         }
 
         // Subtitles
@@ -427,9 +433,26 @@ class NautilusPlayer {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
             const self = this;
             const hlsCfg = {
+                maxBufferSize: 500 * 1000 * 1000,  // 500 MB — match sudoflix
                 maxBufferLength: 30,
-                maxMaxBufferLength: 60,
-                fragLoadingTimeOut: 20000,
+                maxMaxBufferLength: 120,
+                // Robust retry policies (from sudoflix)
+                fragLoadPolicy: {
+                    default: {
+                        maxLoadTimeMs: 30000,
+                        maxTimeToFirstByteMs: 30000,
+                        errorRetry: { maxNumRetry: 3, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+                        timeoutRetry: { maxNumRetry: 3, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+                    },
+                },
+                manifestLoadPolicy: {
+                    default: {
+                        maxLoadTimeMs: 30000,
+                        maxTimeToFirstByteMs: 30000,
+                        errorRetry: { maxNumRetry: 3, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+                        timeoutRetry: { maxNumRetry: 3, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+                    },
+                },
                 // Proxy all sub-requests (segments, variant playlists, keys)
                 xhrSetup(xhr, url) {
                     if (!url.startsWith('/proxy_stream')) {
@@ -442,18 +465,49 @@ class NautilusPlayer {
             this.hls = new Hls(hlsCfg);
             this.hls.loadSource(playUrl);
             this.hls.attachMedia(this.video);
-            this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            this.hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+                console.log(`[Player] HLS manifest parsed: ${data.levels.length} quality levels`);
                 this.video.play().catch(() => {});
             });
             this.hls.on(Hls.Events.ERROR, (e, data) => {
+                console.warn('[Player] HLS error:', data.type, data.details, data.fatal ? '(FATAL)' : '');
+                if (data.response) {
+                    console.warn('[Player] Response status:', data.response.code);
+                }
                 if (data.fatal) {
-                    console.warn('[Player] HLS fatal error:', data.type, data.details);
-                    this.hls.destroy();
-                    this.hls = null;
-                    this._tryNextSource();
+                    switch(data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            console.warn('[Player] Network error, attempting recovery...');
+                            this.hls.startLoad();
+                            // If recovery fails after 5s, try next source
+                            setTimeout(() => {
+                                if (this.loadingEl.classList.contains('visible') && !this.isPlaying) {
+                                    console.warn('[Player] Recovery failed, trying next source');
+                                    this.hls.destroy();
+                                    this.hls = null;
+                                    this._tryNextSource();
+                                }
+                            }, 5000);
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            console.warn('[Player] Media error, attempting recovery...');
+                            this.hls.recoverMediaError();
+                            break;
+                        default:
+                            console.error('[Player] Unrecoverable HLS error');
+                            this.hls.destroy();
+                            this.hls = null;
+                            this._tryNextSource();
+                            break;
+                    }
                 }
             });
+            this.hls.on(Hls.Events.FRAG_LOADED, () => {
+                // Clear load timeout on first successful fragment
+                clearTimeout(this._loadTimeout);
+            });
         } else if (this.video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari native HLS
             this.video.src = playUrl;
         }
     }
@@ -497,18 +551,14 @@ class NautilusPlayer {
             if (match) pick = match;
         }
 
-        let playUrl = pick.url;
-        if (stream.headers && Object.keys(stream.headers).length) {
-            const params = new URLSearchParams({ url: pick.url });
-            if (stream.headers.Referer) params.append('referer', stream.headers.Referer);
-            if (stream.headers.Origin) params.append('origin', stream.headers.Origin);
-            playUrl = `/proxy_stream?${params}`;
-        }
+        // Always proxy file streams to avoid CORS issues
+        const playUrl = this._proxyUrl(pick.url, stream.headers || {});
 
         this.video.src = playUrl;
         this._fileQualities = sorted;
         this._fileHeaders = stream.headers || {};
         this._currentFileQuality = pick.quality;
+        console.log(`[Player] Loading file stream: ${pick.quality}p via proxy`);
     }
 
     // ─── Subtitle Loading ───

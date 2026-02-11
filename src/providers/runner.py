@@ -104,7 +104,7 @@ class ProviderEngine:
             try:
                 log.info(f"[{source.id}] Trying source scraper...")
                 result = await asyncio.wait_for(
-                    source.scrape(media, self.fetcher), timeout=8)
+                    source.scrape(media, self.fetcher), timeout=15)
             except Exception as e:
                 log.warning(f"[{source.id}] Source failed: {e}")
                 return None
@@ -121,7 +121,7 @@ class ProviderEngine:
                 try:
                     log.info(f"  [{source.id} → {scraper.id}] Resolving embed...")
                     embed_out = await asyncio.wait_for(
-                        scraper.scrape(embed_ref.url, self.fetcher), timeout=6)
+                        scraper.scrape(embed_ref.url, self.fetcher), timeout=12)
                 except Exception as e:
                     log.warning(f"  [{scraper.id}] Embed failed: {e}")
                     continue
@@ -233,7 +233,9 @@ class ProviderEngine:
 #  Import all scrapers to register them
 # ──────────────────────────────
 def _load_scrapers():
-    # ── Sources (30) ──
+    # ── Sources (31) ──
+    from .sources import flix2day       # noqa: F401  rank 500 — RELIABLE (flix2day AES decrypt)
+    from .sources import moviesapi      # noqa: F401  rank 400 — RELIABLE (vidora HLS)
     from .sources import vidlink        # noqa: F401  rank 350 — RELIABLE
     from .sources import whvx           # noqa: F401  rank 300
     from .sources import vidsrcsu       # noqa: F401  rank 229
@@ -249,7 +251,7 @@ def _load_scrapers():
     from .sources import bombtheirish   # noqa: F401  rank 100
     from .sources import nites          # noqa: F401  rank 90
     from .sources import autoembed_src  # noqa: F401  rank 90
-    from .sources import vidsrc         # noqa: F401  rank 90 (disabled)
+    from .sources import vidsrc         # noqa: F401  rank 350 (cloudnestra)
     from .sources import animepahe      # noqa: F401  rank 88 — ANIME
     from .sources import anitaku        # noqa: F401  rank 85 — ANIME
     from .sources import warezcdn       # noqa: F401  rank 81
